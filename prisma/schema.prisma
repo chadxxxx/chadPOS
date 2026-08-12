@@ -1,0 +1,291 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  username      String    @unique
+  displayName   String
+  passwordHash  String
+  role          String    @default("CASHIER")
+  status        String    @default("ACTIVE")
+  recoveryEmail String?
+  pinCode       String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLogin     DateTime?
+
+  sales              Sale[]
+  inventoryMovements InventoryMovement[]
+  expenses           Expense[]
+  auditLogs          AuditLog[]
+  sessions           Session[]
+  recoveryCodes      RecoveryCode[]
+  stockCounts        StockCount[]
+  passwordResets     PasswordReset[]
+  stockReceivings    StockReceiving[]
+  dailyClosings      DailyClosing[]
+  processedReturns   Return[]
+}
+
+model RecoveryCode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  used      Boolean  @default(false)
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  token        String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device       String?
+  browser      String?
+  ipAddress    String?
+  lastActivity DateTime @default(now())
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  used      Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  isActive  Boolean   @default(true)
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
+  products  Product[]
+}
+
+model Supplier {
+  id            String           @id @default(cuid())
+  name          String
+  contactPerson String?
+  phone         String?
+  address       String?
+  notes         String?
+  status        String           @default("ACTIVE")
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  products      Product[]
+  stockReceivings StockReceiving[]
+}
+
+model Product {
+  id              String              @id @default(cuid())
+  name            String
+  barcode         String?
+  sku             String?
+  brand           String?
+  categoryId      String?
+  category        Category?           @relation(fields: [categoryId], references: [id])
+  supplierId      String?
+  supplier        Supplier?           @relation(fields: [supplierId], references: [id])
+  costPrice       Float
+  sellingPrice    Float
+  currentQuantity Int                 @default(0)
+  minStockLevel   Int                 @default(5)
+  unit            String              @default("pc")
+  imageUrl        String?
+  status          String              @default("ACTIVE")
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  saleItems            SaleItem[]
+  inventoryMovements   InventoryMovement[]
+  priceHistory         PriceHistory[]
+  stockReceivingItems  StockReceivingItem[]
+  stockCounts          StockCount[]
+}
+
+model PriceHistory {
+  id           String   @id @default(cuid())
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previousCost Float
+  newCost      Float
+  previousSell Float
+  newSell      Float
+  reason       String?
+  userId       String
+  createdAt    DateTime @default(now())
+}
+
+model InventoryMovement {
+  id              String   @id @default(cuid())
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previousQty     Int
+  quantityChanged Int
+  newQty          Int
+  type            String
+  reason          String?
+  referenceId     String?
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+model Sale {
+  id                String    @id @default(cuid())
+  transactionNumber String    @unique
+  date              DateTime  @default(now())
+  subtotal          Float
+  discount          Float     @default(0)
+  total             Float
+  paymentMethod     String    @default("CASH")
+  paymentAmount     Float
+  changeAmount      Float     @default(0)
+  status            String    @default("COMPLETED")
+  voidReason        String?
+  voidedBy          String?
+  voidedAt          DateTime?
+  cashierId         String
+  cashier           User      @relation(fields: [cashierId], references: [id])
+  createdAt         DateTime  @default(now())
+
+  items        SaleItem[]
+  returns      Return[]
+  dailyClosing DailyClosing?
+}
+
+model SaleItem {
+  id          String   @id @default(cuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String
+  productName String
+  barcode     String?
+  quantity    Int
+  unitPrice   Float
+  costPrice   Float
+  totalPrice  Float
+  createdAt   DateTime @default(now())
+}
+
+model Return {
+  id          String   @id @default(cuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String
+  productName String
+  quantity    Int
+  amount      Float
+  reason      String
+  processedBy String
+  processedByUser User     @relation(fields: [processedBy], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model DailyClosing {
+  id             String   @id @default(cuid())
+  date           String   @unique
+  startingCash   Float    @default(0)
+  cashSales      Float    @default(0)
+  digitalSales   Float    @default(0)
+  totalExpenses  Float    @default(0)
+  expectedCash   Float    @default(0)
+  actualCash     Float?
+  difference     Float?
+  notes          String?
+  closedBy       String
+  closedByUser   User     @relation(fields: [closedBy], references: [id])
+  createdAt      DateTime @default(now())
+
+  sales          Sale[]
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  description String
+  category    String
+  amount      Float
+  date        DateTime @default(now())
+  notes       String?
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model StockReceiving {
+  id          String               @id @default(cuid())
+  supplierId  String?
+  supplier    Supplier?            @relation(fields: [supplierId], references: [id])
+  date        DateTime             @default(now())
+  notes       String?
+  totalCost   Float                @default(0)
+  receivedBy  String
+  receivedByUser User               @relation(fields: [receivedBy], references: [id])
+  createdAt   DateTime             @default(now())
+
+  items       StockReceivingItem[]
+}
+
+model StockReceivingItem {
+  id                String         @id @default(cuid())
+  stockReceivingId  String
+  stockReceiving    StockReceiving @relation(fields: [stockReceivingId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product        @relation(fields: [productId], references: [id])
+  quantity          Int
+  costPrice         Float
+  totalCost         Float
+}
+
+model StockCount {
+  id              String   @id @default(cuid())
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  systemQuantity  Int
+  physicalQuantity Int
+  difference      Int
+  reason          String
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  username      String?
+  action        String
+  recordType    String?
+  recordId      String?
+  previousValue String?
+  newValue      String?
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+}
+
+model StoreSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model PaymentMethod {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+}
