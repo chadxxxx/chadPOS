@@ -14,8 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertTriangle, PackageX, Package, RotateCcw, Search, Plus, Minus } from 'lucide-react';
+import { AlertTriangle, PackageX, Package, RotateCcw, Search, Plus, ScanBarcode } from 'lucide-react';
 import { toast } from 'sonner';
+import { BarcodeScanner } from '@/components/pos/barcode-scanner';
 
 const MOVEMENT_TYPES = ['SALE', 'RESTOCK', 'RETURN', 'DAMAGED', 'EXPIRED', 'MANUAL_ADJUSTMENT', 'STOCK_COUNT'];
 
@@ -34,6 +35,7 @@ export function InventoryView() {
   const [adjustDialog, setAdjustDialog] = useState(false);
   const [stockCountDialog, setStockCountDialog] = useState(false);
   const [allProducts, setAllProducts] = useState<any[]>([]);
+  const [showScanner, setShowScanner] = useState(false);
 
   // Adjust form
   const [adjProductId, setAdjProductId] = useState('');
@@ -74,7 +76,7 @@ export function InventoryView() {
     if (res.data) setAllProducts((res.data as any).data || []);
   }, []);
 
-  useEffect(() => { let c = false; fetchProducts().then(() => { if (!c) return; }); return () => { c = true; }; }, [fetchProducts]);
+  useEffect(() => { fetchProducts(); }, [fetchProducts]);
   useEffect(() => { fetchMovements(); }, [fetchMovements]);
   useEffect(() => { if (isAdmin) fetchAllProducts(); }, [isAdmin, fetchAllProducts]);
 
@@ -109,6 +111,11 @@ export function InventoryView() {
     fetchProducts(); fetchMovements();
   };
 
+  const handleScanProductFound = (product: any) => {
+    setSearchTerm(product.name);
+    toast.success(`Found: ${product.name} (Stock: ${product.currentQuantity})`);
+  };
+
   const lowCount = products.filter((p) => p.currentQuantity > 0 && p.currentQuantity <= p.minStockLevel).length;
   const outCount = products.filter((p) => p.currentQuantity === 0).length;
 
@@ -118,6 +125,7 @@ export function InventoryView() {
         <h2 className="text-lg font-semibold">Inventory</h2>
         {isAdmin && (
           <div className="flex gap-2">
+            <Button size="sm" onClick={() => setShowScanner(true)}><ScanBarcode className="h-4 w-4 mr-1" /> Scan</Button>
             <Button size="sm" onClick={() => setAdjustDialog(true)}><Plus className="h-4 w-4 mr-1" /> Adjust Stock</Button>
             <Button size="sm" variant="outline" onClick={() => setStockCountDialog(true)}><RotateCcw className="h-4 w-4 mr-1" /> Stock Count</Button>
           </div>
@@ -226,6 +234,15 @@ export function InventoryView() {
         <DialogFooter><Button variant="outline" onClick={() => setStockCountDialog(false)}>Cancel</Button><Button onClick={handleStockCount} disabled={submitting || !scProductId || !scPhysical || !scReason}>{submitting ? 'Saving...' : 'Record Count'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Barcode Scanner */}
+      {showScanner && (
+        <BarcodeScanner
+          mode="inventory"
+          onProductFound={handleScanProductFound}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
     </div>
   );
 }

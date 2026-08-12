@@ -28,15 +28,15 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['OWNER', 'ADMIN', 'CASHIER'] },
-  { id: 'pos', label: 'POS', icon: ShoppingCart, roles: ['OWNER', 'ADMIN', 'CASHIER'] },
-  { id: 'products', label: 'Products', icon: Package, roles: ['OWNER', 'ADMIN', 'CASHIER'] },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['OWNER', 'ADMIN'] },
+  { id: 'pos', label: 'Point of Sale', icon: ShoppingCart, roles: ['OWNER', 'ADMIN', 'CASHIER'] },
+  { id: 'products', label: 'Products', icon: Package, roles: ['OWNER', 'ADMIN'] },
   { id: 'inventory', label: 'Inventory', icon: Warehouse, roles: ['OWNER', 'ADMIN'] },
-  { id: 'sales', label: 'Sales', icon: Receipt, roles: ['OWNER', 'ADMIN', 'CASHIER'] },
+  { id: 'sales', label: 'Sales History', icon: Receipt, roles: ['OWNER', 'ADMIN'] },
   { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['OWNER', 'ADMIN'] },
   { id: 'expenses', label: 'Expenses', icon: Wallet, roles: ['OWNER', 'ADMIN'] },
   { id: 'suppliers', label: 'Suppliers', icon: Truck, roles: ['OWNER', 'ADMIN'] },
-  { id: 'users', label: 'Users & Permissions', icon: Users, roles: ['OWNER'] },
+  { id: 'users', label: 'Users & Roles', icon: Users, roles: ['OWNER', 'ADMIN'] },
   { id: 'settings', label: 'Settings', icon: Settings, roles: ['OWNER', 'ADMIN'] },
   { id: 'audit', label: 'Audit Log', icon: FileText, roles: ['OWNER'] },
 ];
@@ -47,9 +47,11 @@ export function Sidebar() {
 
   const role = user?.role || '';
   const visibleItems = navItems.filter((item) => item.roles.includes(role));
+  const isCashier = role === 'CASHIER';
 
   const handleNavClick = (viewId: ViewId) => {
     setView(viewId);
+    setSidebarOpen(false);
   };
 
   const handleLogout = async () => {
@@ -59,7 +61,9 @@ export function Sidebar() {
   const sidebarContent = (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center px-4 border-b border-border">
-        <h1 className="text-sm font-semibold text-foreground truncate">My Sari-Sari Store</h1>
+        <h1 className="text-sm font-semibold text-foreground truncate">
+          {isCashier ? 'POS Terminal' : 'My Sari-Sari Store'}
+        </h1>
       </div>
       <ScrollArea className="flex-1 py-2">
         <nav className="space-y-1 px-2">

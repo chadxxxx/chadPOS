@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -15,20 +15,24 @@ import { toast } from 'sonner';
 import { Camera, Keyboard } from 'lucide-react';
 
 interface BarcodeScannerProps {
-  mode: 'pos' | 'product';
+  mode: 'pos' | 'product' | 'inventory';
   onProductFound: (product: any) => void;
   onClose: () => void;
 }
 
 export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraError, setCameraError] = useState('');
   const [manualBarcode, setManualBarcode] = useState('');
   const [manualMode, setManualMode] = useState(false);
   const [scanning, setScanning] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const animFrameRef = useRef<number>(0);
+  const zxingRef = useRef<any>(null);
 
-  const handleBarcodeResult = async (barcode: string) => {
+  const handleBarcodeResult = useCallback(async (barcode: string) => {
+    if (scanning) return;
     setScanning(true);
     try {
       const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode));
@@ -43,7 +47,7 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
     } finally {
       setScanning(false);
     }
-  };
+  }, [scanning, onProductFound, onClose]);
 
   useEffect(() => {
     if (manualMode) return;
@@ -53,7 +57,7 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
     const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         });
         streamRef.current = stream;
         if (cancelled) {
@@ -62,11 +66,14 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
         }
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          await videoRef.current.play();
         }
 
-        // Check BarcodeDetector support
+        // Try native BarcodeDetector first (Chrome/Edge)
         if ('BarcodeDetector' in window) {
-          const detector = new (window as any).BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
+          const detector = new (window as any).BarcodeDetector({
+            formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf'],
+          });
           const detect = async () => {
             if (cancelled || !videoRef.current) return;
             try {
@@ -75,16 +82,53 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
                 handleBarcodeResult(barcodes[0].rawValue);
                 return;
               }
-            } catch {
-              // detection failed, continue scanning
-            }
-            if (!cancelled) requestAnimationFrame(detect);
+            } catch { /* continue scanning */ }
+            if (!cancelled) animFrameRef.current = requestAnimationFrame(detect);
           };
           detect();
+        } else {
+          // Fallback: use ZXing library for Firefox/Safari
+          try {
+            const ZXing = await import('@zxing/library');
+            const reader = new ZXing.BrowserMultiFormatReader();
+            zxingRef.current = reader;
+
+            const scan = () => {
+              if (cancelled || !videoRef.current || !canvasRef.current) return;
+              try {
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                if (ctx && videoRef.current.readyState >= 2) {
+                  canvas.width = videoRef.current.videoWidth;
+                  canvas.height = videoRef.current.videoHeight;
+                  ctx.drawImage(videoRef.current, 0, 0);
+                  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                  const result = reader.decodeFromImageData(imgData);
+                  if (result) {
+                    handleBarcodeResult(result.getText());
+                    return;
+                  }
+                }
+              } catch { /* no barcode found, continue */ }
+              if (!cancelled) animFrameRef.current = requestAnimationFrame(scan);
+            };
+            scan();
+          } catch (err) {
+            if (!cancelled) {
+              setCameraError('Barcode scanning library failed to load. Please enter barcode manually.');
+              setManualMode(true);
+            }
+          }
         }
       } catch (err: any) {
         if (!cancelled) {
-          setCameraError(err.name === 'NotAllowedError' ? 'Camera permission denied.' : 'Could not access camera.');
+          if (err.name === 'NotAllowedError') {
+            setCameraError('Camera permission denied. Please allow camera access or enter the barcode manually.');
+          } else if (err.name === 'NotFoundError') {
+            setCameraError('No camera found. Please enter the barcode manually.');
+          } else {
+            setCameraError('Could not access camera. Please enter the barcode manually.');
+          }
           setManualMode(true);
         }
       }
@@ -94,11 +138,12 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
 
     return () => {
       cancelled = true;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [manualMode]);
+  }, [manualMode, handleBarcodeResult]);
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,36 +151,38 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
     handleBarcodeResult(manualBarcode.trim());
   };
 
-  const barcodeDetectorSupported = typeof window !== 'undefined' && 'BarcodeDetector' in window;
-
   return (
-    <Dialog open onOpenChange={onClose}>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-base">Scan Barcode</DialogTitle>
+          <DialogTitle className="text-base flex items-center gap-2">
+            <Camera className="h-4 w-4" />
+            Scan Barcode
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          {manualMode || cameraError || !barcodeDetectorSupported ? (
+          {manualMode || cameraError ? (
             <div className="space-y-3">
-              {cameraError && !manualMode && (
-                <p className="text-sm text-destructive">{cameraError}</p>
-              )}
-              {!barcodeDetectorSupported && !manualMode && (
-                <p className="text-sm text-muted-foreground">
-                  Barcode scanning is not supported in this browser. Enter the barcode manually.
-                </p>
+              {cameraError && (
+                <div className="rounded-md bg-destructive/10 p-3">
+                  <p className="text-sm text-destructive">{cameraError}</p>
+                </div>
               )}
               <form onSubmit={handleManualSubmit} className="space-y-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="manual-barcode">Barcode</Label>
+                  <Label htmlFor="manual-barcode">Barcode Number</Label>
                   <Input
                     id="manual-barcode"
-                    placeholder="Enter barcode number"
+                    placeholder="Enter or scan barcode with physical scanner"
                     value={manualBarcode}
                     onChange={(e) => setManualBarcode(e.target.value)}
                     autoFocus
+                    autoComplete="off"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    You can also use a physical barcode scanner with a keyboard wedge
+                  </p>
                 </div>
                 <div className="flex gap-2">
                   <Button type="submit" className="flex-1" disabled={scanning || !manualBarcode.trim()}>
@@ -150,15 +197,18 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
           ) : (
             <div className="space-y-3">
               <div className="relative aspect-video rounded-md overflow-hidden bg-black">
-                <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
+                <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+                <canvas ref={canvasRef} className="hidden" />
+                {/* Scanning overlay */}
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute top-1/2 left-4 right-4 h-0.5 -translate-y-1/2 bg-red-500/70 animate-pulse rounded" />
+                </div>
               </div>
-              <p className="text-xs text-center text-muted-foreground">Point camera at a barcode to scan</p>
+              <p className="text-xs text-center text-muted-foreground">
+                Point camera at a barcode to scan automatically
+              </p>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => setManualMode(true)}
-                >
+                <Button variant="outline" className="flex-1" onClick={() => setManualMode(true)}>
                   <Keyboard className="h-4 w-4 mr-2" />
                   Enter Manually
                 </Button>

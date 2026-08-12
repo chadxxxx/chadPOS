@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import { Sidebar } from './sidebar';
 import { useNavStore } from '@/store/nav-store';
+import { useAuthStore } from '@/store/auth-store';
 import { apiFetch } from '@/lib/api';
-import { Menu } from 'lucide-react';
+import { Menu, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DashboardView } from '@/components/dashboard/dashboard-view';
 import { PosView } from '@/components/pos/pos-view';
@@ -20,6 +21,7 @@ import { AuditView } from '@/components/audit/audit-view';
 
 export function AppShell() {
   const { currentView, toggleSidebar } = useNavStore();
+  const { user, logout } = useAuthStore();
   const [storeName, setStoreName] = useState('My Sari-Sari Store');
 
   useEffect(() => {
@@ -64,17 +66,28 @@ export function AppShell() {
       <Sidebar />
 
       {/* Mobile top bar */}
-      <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-card px-4 lg:hidden">
+      <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-border bg-card px-4 lg:hidden">
         <Button
           variant="ghost"
           size="icon"
-          className="h-10 w-10"
+          className="h-10 w-10 shrink-0"
           onClick={toggleSidebar}
           aria-label="Toggle menu"
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="text-sm font-semibold truncate">{storeName}</h1>
+        <h1 className="text-sm font-semibold truncate flex-1">
+          {user?.role === 'CASHIER' ? 'POS Terminal' : storeName}
+        </h1>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-10 w-10 shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={logout}
+          aria-label="Sign out"
+        >
+          <LogOut className="h-5 w-5" />
+        </Button>
       </header>
 
       {/* Main content */}
