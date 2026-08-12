@@ -1,31 +1,33 @@
-'use client'
+'use client';
 
-export default function Home() {
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      gap: '2rem',
-      padding: '1rem'
-    }}>
-      <div style={{
-        position: 'relative',
-        width: '6rem',
-        height: '6rem'
-      }}>
-        <img
-          src="/logo.svg"
-          alt="Z.ai Logo"
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain'
-          }}
-        />
-      </div>
-    </div>
-  )
+import { useEffect } from 'react';
+import { useAuthStore } from '@/store/auth-store';
+import { useNavStore } from '@/store/nav-store';
+import { LoadingScreen } from '@/components/auth/loading-screen';
+import { LoginPage } from '@/components/auth/login-page';
+import { AppShell } from '@/components/layout/app-shell';
+
+export default function Page() {
+  const { isAuthenticated, isLoading, checkSession } = useAuthStore();
+  const setView = useNavStore((s) => s.setView);
+
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      setView('dashboard');
+    }
+  }, [isAuthenticated, setView]);
+
+  if (isLoading) {
+    return <LoadingScreen />;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  return <AppShell />;
 }

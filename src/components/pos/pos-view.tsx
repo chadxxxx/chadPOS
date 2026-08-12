@@ -1,0 +1,559 @@
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useCartStore } from '@/store/cart-store';
+import { useAuthStore } from '@/store/auth-store';
+import { apiFetch, formatCurrency } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { toast } from 'sonner';
+import { Search, ScanBarcode, Keyboard, Minus, Plus, Trash2, X } from 'lucide-react';
+import { ReceiptDialog } from './receipt-dialog';
+import { BarcodeScanner } from './barcode-scanner';
+
+interface Product {
+  id: string;
+  name: string;
+  barcode: string | null;
+  sellingPrice: number;
+  costPrice: number;
+  currentQuantity: number;
+  unit: string;
+}
+
+interface PaymentMethod {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
+interface CompletedSale {
+  transactionNumber: string;
+  date: string;
+  subtotal: number;
+  discount: number;
+  total: number;
+  paymentMethod: string;
+  paymentAmount: number;
+  changeAmount: number;
+  cashier: { displayName: string } | null;
+  items: {
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+  }[];
+}
+
+export function PosView() {
+  const {
+    items,
+    discount,
+    paymentMethod,
+    addItem,
+    removeItem,
+    updateQuantity,
+    setDiscount,
+    setPaymentMethod,
+    clearCart,
+    getSubtotal,
+    getTotal,
+  } = useCartStore();
+
+  const user = useAuthStore((s) => s.user);
+  const role = user?.role || '';
+  const canDiscount = role === 'OWNER' || role === 'ADMIN';
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Product[]>([]);
+  const [showResults, setShowResults] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [checkingOut, setCheckingOut] = useState(false);
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [completedSale, setCompletedSale] = useState<CompletedSale | null>(null);
+  const [showScanner, setShowScanner] = useState(false);
+  const [showManualBarcode, setShowManualBarcode] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [storeName, setStoreName] = useState('My Sari-Sari Store');
+
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch payment methods
+  useEffect(() => {
+    apiFetch<PaymentMethod[]>('/api/settings?section=paymentMethods').then((res) => {
+      if (res.data) setPaymentMethods(res.data.filter((m) => m.isActive));
+    });
+    apiFetch<Record<string, string>>('/api/settings').then((res) => {
+      if (res.data?.storeName) setStoreName(res.data.storeName);
+    });
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setShowResults(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const searchProducts = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setShowResults(false);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await apiFetch<{ data: Product[] }>('/api/products?search=' + encodeURIComponent(query) + '&limit=10');
+      if (res.data) {
+        setSearchResults(res.data.data.filter((p) => p.currentQuantity > 0 && p.status === 'ACTIVE') || []);
+        setShowResults(true);
+      }
+    } catch {
+      // silent
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  let searchTimeout: ReturnType<typeof setTimeout>;
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    clearTimeout(searchTimeout);
+    if (value.trim().length >= 1) {
+      searchTimeout = setTimeout(() => searchProducts(value), 200);
+    } else {
+      setSearchResults([]);
+      setShowResults(false);
+    }
+  };
+
+  const handleAddToCart = (product: Product) => {
+    addItem({
+      productId: product.id,
+      name: product.name,
+      barcode: product.barcode,
+      price: product.sellingPrice,
+      costPrice: product.costPrice,
+      maxQty: product.currentQuantity,
+    });
+    setShowResults(false);
+    setSearchQuery('');
+    searchInputRef.current?.focus();
+  };
+
+  const handleBarcodeFound = (product: Product) => {
+    addItem({
+      productId: product.id,
+      name: product.name,
+      barcode: product.barcode,
+      price: product.sellingPrice,
+      costPrice: product.costPrice,
+      maxQty: product.currentQuantity,
+    });
+  };
+
+  const handleManualBarcodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualBarcode.trim()) return;
+    try {
+      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(manualBarcode.trim()));
+      if (res.data && (res.data as any).found) {
+        handleBarcodeFound((res.data as any).product);
+        setShowManualBarcode(false);
+        setManualBarcode('');
+      } else {
+        toast.error('Product not found for barcode: ' + manualBarcode);
+      }
+    } catch {
+      toast.error('Failed to look up barcode.');
+    }
+  };
+
+  const subtotal = getSubtotal();
+  const total = getTotal();
+  const change = Math.max(0, parseFloat(paymentAmount || '0') - total);
+  const isCash = paymentMethod === 'CASH';
+
+  const handleCheckout = async () => {
+    if (items.length === 0) return;
+    if (isCash && parseFloat(paymentAmount || '0') < total) {
+      toast.error('Insufficient payment amount.');
+      return;
+    }
+
+    setCheckingOut(true);
+    try {
+      const payAmount = isCash ? parseFloat(paymentAmount) : total;
+      const res = await apiFetch<CompletedSale>('/api/pos/checkout', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: items.map((i) => ({
+            productId: i.productId,
+            name: i.name,
+            barcode: i.barcode,
+            price: i.price,
+            costPrice: i.costPrice,
+            quantity: i.quantity,
+          })),
+          discount,
+          paymentMethod,
+          paymentAmount: payAmount,
+        }),
+      });
+
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
+
+      if (res.data) {
+        setCompletedSale(res.data);
+        setShowReceipt(true);
+        clearCart();
+        setPaymentAmount('');
+      }
+    } catch {
+      toast.error('Checkout failed. Please try again.');
+    } finally {
+      setCheckingOut(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Mobile layout: stacked. Desktop: side by side */}
+      <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
+        {/* Left: Search + Cart */}
+        <div className="space-y-4">
+          {/* Search bar */}
+          <div className="relative" ref={searchRef}>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  ref={searchInputRef}
+                  placeholder="Search products by name, barcode, or SKU..."
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
+                  className="pl-9 h-11"
+                  autoFocus
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0"
+                onClick={() => setShowScanner(true)}
+                title="Scan Barcode"
+              >
+                <ScanBarcode className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0"
+                onClick={() => setShowManualBarcode(true)}
+                title="Enter Barcode"
+              >
+                <Keyboard className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Search results dropdown */}
+            {showResults && searchResults.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md max-h-64 overflow-y-auto scrollbar-thin">
+                {searchResults.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => handleAddToCart(p)}
+                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm hover:bg-accent transition-colors min-h-[44px]"
+                  >
+                    <div className="text-left">
+                      <p className="font-medium">{p.name}</p>
+                      {p.barcode && (
+                        <p className="text-xs text-muted-foreground">{p.barcode}</p>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0 ml-3">
+                      <p className="font-medium">{formatCurrency(p.sellingPrice)}</p>
+                      <p className="text-xs text-muted-foreground">Stock: {p.currentQuantity}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {showResults && searching && (
+              <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md p-3">
+                <Skeleton className="h-8 w-full" />
+              </div>
+            )}
+          </div>
+
+          {/* Cart */}
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium">Cart ({items.length} item{items.length !== 1 ? 's' : ''})</CardTitle>
+                {items.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-destructive hover:text-destructive h-8"
+                    onClick={clearCart}
+                  >
+                    Clear All
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {items.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  Cart is empty. Search or scan products to add.
+                </div>
+              ) : (
+                <ScrollArea className="max-h-[40vh] lg:max-h-[50vh]">
+                  <div className="px-4 pb-2 space-y-1">
+                    {items.map((item) => (
+                      <div
+                        key={item.productId}
+                        className="flex items-center gap-2 py-2 border-b border-border last:border-0"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{item.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatCurrency(item.price)} each
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => updateQuantity(item.productId, item.quantity - 1)}
+                          >
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <span className="w-8 text-center text-sm font-medium">
+                            {item.quantity}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => updateQuantity(item.productId, item.quantity + 1)}
+                            disabled={item.quantity >= item.maxQty}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <div className="text-right shrink-0 w-20">
+                          <p className="text-sm font-medium">{formatCurrency(item.price * item.quantity)}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                          onClick={() => removeItem(item.productId)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+
+              {/* Cart totals */}
+              {items.length > 0 && (
+                <div className="border-t border-border p-4 space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Subtotal</span>
+                    <span>{formatCurrency(subtotal)}</span>
+                  </div>
+                  {canDiscount && (
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="pos-discount" className="text-sm text-muted-foreground shrink-0">Discount</Label>
+                      <div className="relative w-28">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                          ₱
+                        </span>
+                        <Input
+                          id="pos-discount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={discount || ''}
+                          onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                          className="pl-7 h-8 text-sm"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <Separator />
+                  <div className="flex justify-between text-base font-semibold">
+                    <span>Total</span>
+                    <span>{formatCurrency(total)}</span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right: Payment section */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium">Payment</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Payment method */}
+              <div className="space-y-1.5">
+                <Label className="text-sm">Payment Method</Label>
+                <Select value={paymentMethod} onValueChange={(v) => { setPaymentMethod(v); setPaymentAmount(''); }}>
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentMethods.map((m) => (
+                      <SelectItem key={m.id} value={m.name}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                    {paymentMethods.length === 0 && (
+                      <SelectItem value="CASH">Cash</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Cash payment amount */}
+              {isCash && items.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="payment-amount" className="text-sm">
+                    Amount Tendered
+                  </Label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                      ₱
+                    </span>
+                    <Input
+                      id="payment-amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(e) => setPaymentAmount(e.target.value)}
+                      className="pl-7 h-11"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  {/* Quick amount buttons */}
+                  <div className="flex flex-wrap gap-2">
+                    {[total, Math.ceil(total / 10) * 10, Math.ceil(total / 50) * 50, Math.ceil(total / 100) * 100, 500, 1000]
+                      .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+                      .slice(0, 4)
+                      .map((amt) => (
+                        <Button
+                          key={amt}
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => setPaymentAmount(amt.toFixed(2))}
+                        >
+                          {formatCurrency(amt)}
+                        </Button>
+                      ))}
+                  </div>
+                  {parseFloat(paymentAmount || '0') >= total && parseFloat(paymentAmount || '0') > 0 && (
+                    <div className="flex justify-between text-sm bg-emerald-50 dark:bg-emerald-950/30 rounded-md p-2 -mx-1">
+                      <span className="text-muted-foreground">Change</span>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                        {formatCurrency(change)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Complete Sale button */}
+              <Button
+                className="w-full h-12 text-base font-semibold"
+                disabled={items.length === 0 || checkingOut || (isCash && parseFloat(paymentAmount || '0') < total)}
+                onClick={handleCheckout}
+              >
+                {checkingOut ? 'Processing...' : `Complete Sale - ${formatCurrency(total)}`}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Receipt dialog */}
+      <ReceiptDialog
+        open={showReceipt}
+        onOpenChange={setShowReceipt}
+        sale={completedSale}
+        storeName={storeName}
+      />
+
+      {/* Barcode scanner */}
+      {showScanner && (
+        <BarcodeScanner
+          mode="pos"
+          onProductFound={handleBarcodeFound}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+
+      {/* Manual barcode dialog */}
+      {showManualBarcode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/40" onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }} />
+          <div className="relative z-10 bg-card rounded-lg shadow-xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold">Enter Barcode</h3>
+              <button onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <form onSubmit={handleManualBarcodeSubmit} className="space-y-3">
+              <Input
+                placeholder="Enter barcode number"
+                value={manualBarcode}
+                onChange={(e) => setManualBarcode(e.target.value)}
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <Button type="submit" className="flex-1" disabled={!manualBarcode.trim()}>Look Up</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }}>Cancel</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

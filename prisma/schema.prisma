@@ -20,17 +20,17 @@ model User {
   updatedAt     DateTime  @updatedAt
   lastLogin     DateTime?
 
-  sales              Sale[]
-  inventoryMovements InventoryMovement[]
-  expenses           Expense[]
-  auditLogs          AuditLog[]
-  sessions           Session[]
-  recoveryCodes      RecoveryCode[]
-  stockCounts        StockCount[]
-  passwordResets     PasswordReset[]
-  stockReceivings    StockReceiving[]
-  dailyClosings      DailyClosing[]
-  processedReturns   Return[]
+  sales               Sale[]
+  inventoryMovements  InventoryMovement[]
+  expenses            Expense[]
+  auditLogs           AuditLog[]
+  sessions            Session[]
+  recoveryCodes       RecoveryCode[]
+  stockCounts         StockCount[]
+  passwordResets      PasswordReset[]
+  stockReceivings     StockReceiving[]
+  dailyClosings       DailyClosing[]
+  processedReturns    Return[]
 }
 
 model RecoveryCode {
@@ -76,16 +76,16 @@ model Category {
 }
 
 model Supplier {
-  id            String           @id @default(cuid())
-  name          String
-  contactPerson String?
-  phone         String?
-  address       String?
-  notes         String?
-  status        String           @default("ACTIVE")
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  products      Product[]
+  id              String           @id @default(cuid())
+  name            String
+  contactPerson   String?
+  phone           String?
+  address         String?
+  notes           String?
+  status          String           @default("ACTIVE")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  products        Product[]
   stockReceivings StockReceiving[]
 }
 
@@ -109,11 +109,11 @@ model Product {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
-  saleItems            SaleItem[]
-  inventoryMovements   InventoryMovement[]
-  priceHistory         PriceHistory[]
-  stockReceivingItems  StockReceivingItem[]
-  stockCounts          StockCount[]
+  saleItems           SaleItem[]
+  inventoryMovements  InventoryMovement[]
+  priceHistory        PriceHistory[]
+  stockReceivingItems StockReceivingItem[]
+  stockCounts         StockCount[]
 }
 
 model PriceHistory {
@@ -161,10 +161,11 @@ model Sale {
   cashierId         String
   cashier           User      @relation(fields: [cashierId], references: [id])
   createdAt         DateTime  @default(now())
+  dailyClosingId    String?
+  dailyClosing      DailyClosing?  @relation(fields: [dailyClosingId], references: [id])
 
   items        SaleItem[]
   returns      Return[]
-  dailyClosing DailyClosing?
 }
 
 model SaleItem {
@@ -172,6 +173,7 @@ model SaleItem {
   saleId      String
   sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   productId   String
+  product     Product  @relation(fields: [productId], references: [id])
   productName String
   barcode     String?
   quantity    Int
@@ -182,17 +184,17 @@ model SaleItem {
 }
 
 model Return {
-  id          String   @id @default(cuid())
-  saleId      String
-  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  productId   String
-  productName String
-  quantity    Int
-  amount      Float
-  reason      String
-  processedBy String
+  id              String   @id @default(cuid())
+  saleId          String
+  sale            Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId       String
+  productName     String
+  quantity        Int
+  amount          Float
+  reason          String
+  processedBy     String
   processedByUser User     @relation(fields: [processedBy], references: [id])
-  createdAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
 }
 
 model DailyClosing {
@@ -226,46 +228,47 @@ model Expense {
 }
 
 model StockReceiving {
-  id          String               @id @default(cuid())
-  supplierId  String?
-  supplier    Supplier?            @relation(fields: [supplierId], references: [id])
-  date        DateTime             @default(now())
-  notes       String?
-  totalCost   Float                @default(0)
-  receivedBy  String
-  receivedByUser User               @relation(fields: [receivedBy], references: [id])
-  createdAt   DateTime             @default(now())
+  id             String               @id @default(cuid())
+  supplierId     String?
+  supplier       Supplier?            @relation(fields: [supplierId], references: [id])
+  date           DateTime             @default(now())
+  notes          String?
+  totalCost      Float                @default(0)
+  receivedBy     String
+  receivedByUser User                 @relation(fields: [receivedBy], references: [id])
+  createdAt      DateTime             @default(now())
 
-  items       StockReceivingItem[]
+  items          StockReceivingItem[]
 }
 
 model StockReceivingItem {
-  id                String         @id @default(cuid())
-  stockReceivingId  String
-  stockReceiving    StockReceiving @relation(fields: [stockReceivingId], references: [id], onDelete: Cascade)
-  productId         String
-  product           Product        @relation(fields: [productId], references: [id])
-  quantity          Int
-  costPrice         Float
-  totalCost         Float
+  id               String         @id @default(cuid())
+  stockReceivingId String
+  stockReceiving   StockReceiving @relation(fields: [stockReceivingId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product        @relation(fields: [productId], references: [id])
+  quantity         Int
+  costPrice        Float
+  totalCost        Float
 }
 
 model StockCount {
-  id              String   @id @default(cuid())
-  productId       String
-  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  systemQuantity  Int
+  id               String   @id @default(cuid())
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  systemQuantity   Int
   physicalQuantity Int
-  difference      Int
-  reason          String
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  createdAt       DateTime @default(now())
+  difference       Int
+  reason           String
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  createdAt        DateTime @default(now())
 }
 
 model AuditLog {
   id            String   @id @default(cuid())
   userId        String?
+  user          User?    @relation(fields: [userId], references: [id])
   username      String?
   action        String
   recordType    String?
