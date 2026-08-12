@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAuthStore } from '@/store/auth-store';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Eye, EyeOff } from 'lucide-react';
 
 export function LoginPage() {
-  const { checkSetup, isSetupComplete, isLoading, loginError, setup, login, clearError } = useAuthStore();
+  const { isSetupComplete, loginError, setup, login, clearError } = useAuthStore();
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -17,10 +17,6 @@ export function LoginPage() {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    checkSetup();
-  }, [checkSetup]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +32,7 @@ export function LoginPage() {
   const handleSetup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !displayName.trim() || !password || password !== confirmPassword) return;
-    if (password.length < 6) return;
+    if (password.length < 8) return;
     setSubmitting(true);
     const ok = await setup(username.trim(), displayName.trim(), password, recoveryEmail.trim() || undefined);
     setSubmitting(false);
@@ -45,19 +41,11 @@ export function LoginPage() {
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-background">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-muted-foreground border-t-primary" />
-      </div>
-    );
-  }
-
   const setupError = !isSetupComplete
     ? password !== confirmPassword
       ? 'Passwords do not match.'
-      : password.length > 0 && password.length < 6
-        ? 'Password must be at least 6 characters.'
+      : password.length > 0 && password.length < 8
+        ? 'Password must be at least 8 characters.'
         : ''
     : '';
 
@@ -86,6 +74,7 @@ export function LoginPage() {
                   onChange={(e) => setUsername(e.target.value)}
                   required
                   autoComplete="username"
+                  autoFocus
                 />
               </div>
               <div className="space-y-2">
@@ -105,7 +94,7 @@ export function LoginPage() {
                   <Input
                     id="setup-password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="At least 6 characters"
+                    placeholder="At least 8 characters"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required

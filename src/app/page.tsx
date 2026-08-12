@@ -8,12 +8,13 @@ import { LoginPage } from '@/components/auth/login-page';
 import { AppShell } from '@/components/layout/app-shell';
 
 export default function Page() {
-  const { isAuthenticated, isLoading, checkSession } = useAuthStore();
+  const { isAuthenticated, isLoading, init } = useAuthStore();
   const setView = useNavStore((s) => s.setView);
 
+  // Single initialization: checks session + setup status
   useEffect(() => {
-    checkSession();
-  }, [checkSession]);
+    init();
+  }, [init]);
 
   useEffect(() => {
     if (isAuthenticated) {

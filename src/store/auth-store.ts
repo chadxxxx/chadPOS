@@ -15,32 +15,52 @@ interface AuthState {
   isLoading: boolean;
   isSetupComplete: boolean;
   loginError: string;
-  checkSetup: () => Promise<void>;
+  init: () => Promise<void>;
   setup: (username: string, displayName: string, password: string, email?: string) => Promise<boolean>;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  checkSession: () => Promise<boolean>;
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   isAuthenticated: false,
   isLoading: true,
   isSetupComplete: false,
   loginError: '',
 
-  checkSetup: async () => {
+  /** Single init call: check session token first, then check setup status */
+  init: async () => {
     try {
-      const res = await fetch('/api/auth/setup');
-      const json = await res.json();
-      set({ isSetupComplete: json.data?.isSetupComplete ?? false, isLoading: false });
-    } catch {
-      set({ isLoading: false });
+      // 1. Check existing session
+      const token = sessionStorage.getItem('session_token');
+      if (token) {
+        try {
+          const res = await apiFetch('/api/auth/session');
+          if (!res.error && res.data) {
+            set({ user: res.data as User, isAuthenticated: true, isLoading: false, isSetupComplete: true });
+            return;
+          }
+        } catch {
+          // Session invalid, continue to setup check
+        }
+        sessionStorage.removeItem('session_token');
+      }
+
+      // 2. Check if setup is complete
+      const setupRes = await fetch('/api/auth/setup');
+      const setupJson = await setupRes.json();
+      const isSetupComplete = setupJson?.data?.isSetupComplete === true;
+      set({ isSetupComplete, isLoading: false, isAuthenticated: false, user: null });
+    } catch (err) {
+      // On any error, assume setup not complete so user can set up
+      console.error('Init error:', err);
+      set({ isLoading: false, isSetupComplete: false, isAuthenticated: false, user: null });
     }
   },
 
   setup: async (username, displayName, password, email) => {
+    set({ loginError: '' });
     const res = await apiFetch('/api/auth/setup', {
       method: 'POST',
       body: JSON.stringify({ username, displayName, password, recoveryEmail: email }),
@@ -64,22 +84,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    await apiFetch('/api/auth/logout', { method: 'POST' });
+    try { await apiFetch('/api/auth/logout', { method: 'POST' }); } catch {}
     sessionStorage.removeItem('session_token');
-    set({ user: null, isAuthenticated: false });
-  },
-
-  checkSession: async () => {
-    const token = sessionStorage.getItem('session_token');
-    if (!token) { set({ isLoading: false, isAuthenticated: false }); return false; }
-    const res = await apiFetch('/api/auth/session');
-    if (res.error || !res.data) {
-      sessionStorage.removeItem('session_token');
-      set({ user: null, isAuthenticated: false, isLoading: false });
-      return false;
-    }
-    set({ user: res.data as User, isAuthenticated: true, isLoading: false });
-    return true;
+    set({ user: null, isAuthenticated: false, isSetupComplete: true });
   },
 
   clearError: () => set({ loginError: '' }),
