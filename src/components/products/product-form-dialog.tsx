@@ -70,7 +70,7 @@ export function ProductFormDialog({ open, onOpenChange, product, onSaved }: Prod
         setForm({
           name: product.name || '',
           barcode: product.barcode || '',
-          sku: product.sku || '',
+          sku: product.barcode || product.sku || '',  // Prefer barcode as SKU
           brand: product.brand || '',
           categoryId: product.categoryId || '',
           supplierId: product.supplierId || '',
@@ -99,11 +99,14 @@ export function ProductFormDialog({ open, onOpenChange, product, onSaved }: Prod
   }, [open, product]);
 
   const updateField = (key: string, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-    // Auto-fill SKU from barcode
-    if (key === 'barcode' && value.trim() && !form.sku) {
-      setForm((prev) => ({ ...prev, sku: value.trim() }));
-    }
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      // SKU always mirrors barcode
+      if (key === 'barcode') {
+        next.sku = value.trim();
+      }
+      return next;
+    });
   };
 
   const validate = () => {
@@ -120,7 +123,7 @@ export function ProductFormDialog({ open, onOpenChange, product, onSaved }: Prod
       const body = {
         name: form.name.trim(),
         barcode: form.barcode.trim() || null,
-        sku: form.sku.trim() || null,
+        sku: form.barcode.trim() || null,  // SKU = barcode always
         brand: form.brand.trim() || null,
         categoryId: form.categoryId || null,
         supplierId: form.supplierId || null,
@@ -158,13 +161,10 @@ export function ProductFormDialog({ open, onOpenChange, product, onSaved }: Prod
               <Label htmlFor="pf-name">Product Name *</Label>
               <Input id="pf-name" value={form.name} onChange={(e) => updateField('name', e.target.value)} placeholder="e.g. Lucky Me Pancit Canton" />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pf-barcode">Barcode</Label>
-              <Input id="pf-barcode" value={form.barcode} onChange={(e) => updateField('barcode', e.target.value)} placeholder="e.g. 4806540212345" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pf-sku">SKU</Label>
-              <Input id="pf-sku" value={form.sku} onChange={(e) => updateField('sku', e.target.value)} placeholder="e.g. LM-001" />
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="pf-barcode">Barcode / Item Number (also used as SKU)</Label>
+              <Input id="pf-barcode" value={form.barcode} onChange={(e) => updateField('barcode', e.target.value)} placeholder="e.g. 4806540212345 or scan with barcode scanner" />
+              <p className="text-xs text-muted-foreground">This serves as both the barcode and SKU for the product.</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="pf-brand">Brand</Label>

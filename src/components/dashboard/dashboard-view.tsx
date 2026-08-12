@@ -15,7 +15,8 @@ import {
 import { apiFetch } from '@/lib/api';
 import { formatCurrency, formatDateShort } from '@/lib/api';
 import { useNavStore } from '@/store/nav-store';
-import { TrendingUp, DollarSign, AlertTriangle, XCircle } from 'lucide-react';
+import { useAuthStore } from '@/store/auth-store';
+import { TrendingUp, DollarSign, AlertTriangle, XCircle, HandCoins } from 'lucide-react';
 
 interface TodayReport {
   summary: {
@@ -34,7 +35,14 @@ interface Transaction {
   date: string;
   total: number;
   status: string;
+  paymentMethod: string;
   cashier: { displayName: string } | null;
+}
+
+interface UtangSummary {
+  pendingTotal: number;
+  collectedToday: number;
+  uniquePendingCustomers: number;
 }
 
 export function DashboardView() {
@@ -42,31 +50,42 @@ export function DashboardView() {
   const [lowStockCount, setLowStockCount] = useState(0);
   const [outStockCount, setOutStockCount] = useState(0);
   const [recentSales, setRecentSales] = useState<Transaction[]>([]);
+  const [utangSummary, setUtangSummary] = useState<UtangSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const setView = useNavStore((s) => s.setView);
+  const user = useAuthStore((s) => s.user);
+  const canViewUtang = user?.role === 'OWNER' || user?.role === 'ADMIN';
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [reportRes, lowRes, outRes, salesRes] = await Promise.all([
+      const promises: Promise<any>[] = [
         apiFetch<TodayReport>('/api/reports?type=today'),
         apiFetch<{ total: number }>('/api/products?stockStatus=low&limit=0'),
         apiFetch<{ total: number }>('/api/products?stockStatus=out&limit=0'),
         apiFetch<{ data: Transaction[] }>('/api/sales?limit=5'),
-      ]);
+      ];
+      if (canViewUtang) {
+        promises.push(apiFetch<UtangSummary>('/api/utang?limit=0'));
+      }
+      const results = await Promise.all(promises);
 
-      if (reportRes.data) setReport(reportRes.data);
-      if (lowRes.data) setLowStockCount(lowRes.data.total);
-      if (outRes.data) setOutStockCount(outRes.data.total);
-      if (salesRes.data) setRecentSales(salesRes.data.data);
+      if (results[0].data) setReport(results[0].data);
+      if (results[1].data) setLowStockCount(results[1].data.total);
+      if (results[2].data) setOutStockCount(results[2].data.total);
+      if (results[3].data) setRecentSales(results[3].data.data);
+      if (results[4]?.data) {
+        const d = results[4].data as any;
+        setUtangSummary(d.summary || null);
+      }
     } catch {
       setError('Failed to load dashboard data.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewUtang]);
 
   useEffect(() => {
     fetchData();
@@ -189,6 +208,56 @@ export function DashboardView() {
         </Card>
       </div>
 
+      {/* Utang summary row - only for admin/owner */}
+      {canViewUtang && utangSummary && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Card
+            className="cursor-pointer hover:ring-2 hover:ring-red-400 transition-shadow"
+            onClick={() => setView('utang')}
+          >
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 dark:bg-red-950/30">
+                  <HandCoins className="h-5 w-5 text-red-600 dark:text-red-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Pending Utang</p>
+                  <p className="text-lg font-semibold text-red-600">{formatCurrency(utangSummary.pendingTotal)}</p>
+                  <p className="text-xs text-muted-foreground">{utangSummary.uniquePendingCustomers} customer{utangSummary.uniquePendingCustomers !== 1 ? 's' : ''}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card
+            className="cursor-pointer hover:ring-2 hover:ring-green-400 transition-shadow"
+            onClick={() => setView('utang')}
+          >
+            <CardContent className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50 dark:bg-green-950/30">
+                  <DollarSign className="h-5 w-5 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Utang Collected Today</p>
+                  <p className="text-lg font-semibold text-green-600">{formatCurrency(utangSummary.collectedToday)}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardContent className="p-4 flex items-center justify-center">
+              <button
+                onClick={() => setView('utang')}
+                className="text-sm text-primary hover:underline flex items-center gap-1.5"
+              >
+                <HandCoins className="h-4 w-4" />
+                View All Utang Transactions
+              </button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Recent Transactions */}
         <Card>
@@ -218,10 +287,10 @@ export function DashboardView() {
                       <TableCell className="text-xs">{txn.cashier?.displayName || '-'}</TableCell>
                       <TableCell>
                         <Badge
-                          variant={txn.status === 'COMPLETED' ? 'default' : 'secondary'}
+                          variant={txn.paymentMethod === 'UTANG' ? 'destructive' : txn.status === 'COMPLETED' ? 'default' : 'secondary'}
                           className="text-xs"
                         >
-                          {txn.status}
+                          {txn.paymentMethod === 'UTANG' ? '☕ Utang' : txn.status}
                         </Badge>
                       </TableCell>
                     </TableRow>

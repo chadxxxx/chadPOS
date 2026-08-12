@@ -62,6 +62,8 @@ export async function PUT(
         if (dup) return apiError('A product with this barcode already exists.');
       }
       updateData.barcode = barcode || null;
+      // Keep SKU in sync with barcode
+      updateData.sku = barcode || null;
     }
 
     let newCostPrice = existing.costPrice;

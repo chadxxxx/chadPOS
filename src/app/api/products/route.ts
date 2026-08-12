@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
       data: {
         name: name.trim(),
         barcode: barcode || null,
-        sku: sku || null,
+        sku: barcode || null, // SKU = barcode
         brand: brand || null,
         categoryId: categoryId || null,
         supplierId: supplierId || null,

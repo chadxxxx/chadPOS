@@ -43,8 +43,14 @@ export async function GET(req: NextRequest) {
     end = new Date(todayStr + 'T23:59:59');
   }
 
+  // CRITICAL: Only count actual paid sales (NOT utang/credit)
+  // Utang sales have paymentMethod='UTANG' - exclude them from gross sales
   const sales = await db.sale.findMany({
-    where: { date: { gte: start, lte: end }, status: 'COMPLETED' },
+    where: {
+      date: { gte: start, lte: end },
+      status: 'COMPLETED',
+      paymentMethod: { not: 'UTANG' },
+    },
     include: { items: true },
   });
 

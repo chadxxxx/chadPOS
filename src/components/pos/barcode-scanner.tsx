@@ -30,24 +30,39 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number>(0);
   const zxingRef = useRef<any>(null);
+  // Use ref for the busy guard to avoid re-triggering useEffect
+  const busyRef = useRef(false);
+  // Keep latest callbacks in refs so the scanning loop always calls the current version
+  const onProductFoundRef = useRef(onProductFound);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onProductFoundRef.current = onProductFound; }, [onProductFound]);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   const handleBarcodeResult = useCallback(async (barcode: string) => {
-    if (scanning) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setScanning(true);
     try {
       const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode));
       if (res.data && (res.data as any).found) {
-        onProductFound((res.data as any).product);
-        onClose();
+        const product = (res.data as any).product;
+        onProductFoundRef.current(product);
+        // Small delay so user sees the flash of recognition
+        setTimeout(() => onCloseRef.current(), 300);
       } else {
         toast.error('Product not found for barcode: ' + barcode);
+        // Allow re-scanning after a short delay
+        setTimeout(() => { busyRef.current = false; setScanning(false); }, 1000);
+        return;
       }
     } catch {
       toast.error('Failed to look up barcode.');
-    } finally {
-      setScanning(false);
+      setTimeout(() => { busyRef.current = false; setScanning(false); }, 1000);
+      return;
     }
-  }, [scanning, onProductFound, onClose]);
+    busyRef.current = false;
+    setScanning(false);
+  }, []);
 
   useEffect(() => {
     if (manualMode) return;
@@ -141,6 +156,7 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
       }
     };
   }, [manualMode, handleBarcodeResult]);
@@ -196,6 +212,11 @@ export function BarcodeScanner({ mode, onProductFound, onClose }: BarcodeScanner
             </div>
           ) : (
             <div className="space-y-3">
+              {scanning && (
+                <div className="rounded-md bg-emerald-50 dark:bg-emerald-950/30 p-2 text-center">
+                  <p className="text-sm text-emerald-600 font-medium">Barcode detected! Looking up product...</p>
+                </div>
+              )}
               <div className="relative aspect-video rounded-md overflow-hidden bg-black">
                 <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
                 <canvas ref={canvasRef} className="hidden" />

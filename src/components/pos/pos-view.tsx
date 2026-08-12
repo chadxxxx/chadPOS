@@ -32,6 +32,7 @@ interface Product {
   currentQuantity: number;
   unit: string;
   status: string;
+  sku?: string | null;
 }
 
 interface PaymentMethod {
@@ -90,6 +91,7 @@ export function PosView() {
   const [completedSale, setCompletedSale] = useState<CompletedSale | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [storeName, setStoreName] = useState('My Sari-Sari Store');
 
   const searchRef = useRef<HTMLDivElement>(null);
@@ -100,7 +102,18 @@ export function PosView() {
   // Fetch payment methods
   useEffect(() => {
     apiFetch('/api/settings?section=paymentMethods').then((res) => {
-      if (res.data) setPaymentMethods((res.data as any[]).filter((m: any) => m.isActive));
+      if (res.data) {
+        const methods = (res.data as any[]).filter((m: any) => m.isActive);
+        setPaymentMethods(methods);
+        // If no methods configured, use defaults including Utang
+        if (methods.length === 0) {
+          setPaymentMethods([
+            { id: 'default-cash', name: 'Cash', isActive: true },
+            { id: 'default-gcash', name: 'GCash', isActive: true },
+            { id: 'default-utang', name: 'Utang', isActive: true },
+          ]);
+        }
+      }
     });
     apiFetch<Record<string, string>>('/api/settings').then((res) => {
       if (res.data?.storeName) setStoreName(res.data.storeName);
@@ -160,17 +173,38 @@ export function PosView() {
     }
     setSearching(true);
     try {
-      const res = await apiFetch('/api/products?search=' + encodeURIComponent(query) + '&limit=10');
+      // Always request ACTIVE status from API to avoid archived/inactive products
+      const res = await apiFetch('/api/products?search=' + encodeURIComponent(query) + '&status=ACTIVE&limit=20');
       if (res.data) {
         const d = res.data as any;
         const products: Product[] = d.data || d;
-        setSearchResults(products.filter((p) => p.currentQuantity > 0 && p.status === 'ACTIVE'));
+        setSearchResults(products);
         setShowResults(true);
       }
     } catch {
       // silent
     } finally {
       setSearching(false);
+    }
+  }, []);
+
+  // Browse all in-stock products
+  const browseProducts = useCallback(async () => {
+    setBrowsing(true);
+    setSearching(true);
+    try {
+      const res = await apiFetch('/api/products?status=ACTIVE&limit=50');
+      if (res.data) {
+        const d = res.data as any;
+        const products: Product[] = d.data || d;
+        setSearchResults(products);
+        setShowResults(true);
+      }
+    } catch {
+      // silent
+    } finally {
+      setSearching(false);
+      setBrowsing(false);
     }
   }, []);
 
@@ -187,6 +221,10 @@ export function PosView() {
   };
 
   const handleAddToCart = (product: Product) => {
+    if (product.currentQuantity <= 0) {
+      toast.error('Product is out of stock: ' + product.name);
+      return;
+    }
     addItem({
       productId: product.id,
       name: product.name,
@@ -201,6 +239,10 @@ export function PosView() {
   };
 
   const handleBarcodeFound = (product: any) => {
+    if (product.currentQuantity <= 0) {
+      toast.error('Product is out of stock: ' + product.name);
+      return;
+    }
     addItem({
       productId: product.id,
       name: product.name,
@@ -209,6 +251,7 @@ export function PosView() {
       costPrice: product.costPrice,
       maxQty: product.currentQuantity,
     });
+    toast.success('Added: ' + product.name);
   };
 
   const handlePhysicalBarcode = async (barcode: string) => {
@@ -216,7 +259,6 @@ export function PosView() {
       const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
       if (res.data && (res.data as any).found) {
         handleBarcodeFound((res.data as any).product);
-        toast.success('Added: ' + (res.data as any).product.name);
       } else {
         toast.error('Product not found: ' + barcode);
       }
@@ -304,6 +346,15 @@ export function PosView() {
               </div>
               <Button
                 variant="outline"
+                className="h-11 px-3 shrink-0 text-xs"
+                onClick={browseProducts}
+                disabled={browsing}
+                title="Browse all products"
+              >
+                {browsing ? '...' : 'Browse'}
+              </Button>
+              <Button
+                variant="outline"
                 size="icon"
                 className="h-11 w-11 shrink-0"
                 onClick={() => setShowScanner(true)}
@@ -320,7 +371,7 @@ export function PosView() {
                   <button
                     key={p.id}
                     onClick={() => handleAddToCart(p)}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-sm hover:bg-accent transition-colors min-h-[44px]"
+                    className={`flex w-full items-center justify-between px-3 py-2.5 text-sm hover:bg-accent transition-colors min-h-[44px] ${p.currentQuantity <= 0 ? 'opacity-50' : ''}`}
                   >
                     <div className="text-left">
                       <p className="font-medium">{p.name}</p>
@@ -328,7 +379,9 @@ export function PosView() {
                     </div>
                     <div className="text-right shrink-0 ml-3">
                       <p className="font-medium">{formatCurrency(p.sellingPrice)}</p>
-                      <p className="text-xs text-muted-foreground">Stock: {p.currentQuantity}</p>
+                      <p className={`text-xs ${p.currentQuantity <= 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+                        {p.currentQuantity <= 0 ? 'Out of Stock' : `Stock: ${p.currentQuantity}`}
+                      </p>
                     </div>
                   </button>
                 ))}
@@ -356,7 +409,7 @@ export function PosView() {
             <CardContent className="p-0">
               {items.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
-                  Cart is empty. Search or scan products to add.<br />
+                  Cart is empty. Search, browse, or scan products to add.<br />
                   <span className="text-xs">Physical barcode scanner is also supported.</span>
                 </div>
               ) : (
@@ -428,11 +481,8 @@ export function PosView() {
                   <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {paymentMethods.map((m) => (
-                      <SelectItem key={m.id} value={m.name === 'Utang' ? 'UTANG' : m.name}>{m.name}</SelectItem>
+                      <SelectItem key={m.id} value={m.name === 'Utang' ? 'UTANG' : m.name}>{m.name === 'Utang' ? '☕ Utang (Credit)' : m.name}</SelectItem>
                     ))}
-                    {paymentMethods.length === 0 && (
-                      <><SelectItem value="Cash">Cash</SelectItem><SelectItem value="UTANG">Utang</SelectItem></>
-                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -448,7 +498,9 @@ export function PosView() {
                     onChange={(e) => setCustomerName(e.target.value)}
                     className="h-11"
                   />
-                  <p className="text-xs text-muted-foreground">This sale will be recorded as credit (utang). The customer will pay later.</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    This sale will be recorded as credit (utang). The customer will pay later. Utang is NOT counted as gross sales.
+                  </p>
                 </div>
               )}
 
