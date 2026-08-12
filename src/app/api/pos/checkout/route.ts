@@ -7,21 +7,24 @@ export async function POST(req: NextRequest) {
   if (!auth) return apiError('Not authenticated.', 401);
 
   try {
-    const { items, discount, paymentMethod, paymentAmount } = await req.json();
+    const { items, discount, paymentMethod, paymentAmount, customerName } = await req.json();
 
     if (!items || !Array.isArray(items) || items.length === 0) return apiError('Cart is empty.');
-    if (!paymentMethod || !paymentAmount) return apiError('Payment method and amount are required.');
+    if (!paymentMethod) return apiError('Payment method is required.');
+
+    const isUtang = paymentMethod === 'UTANG';
+
+    if (isUtang && !customerName?.trim()) return apiError('Customer name is required for Utang.');
+    if (!isUtang && !paymentAmount) return apiError('Payment amount is required.');
 
     const subtotal = items.reduce((sum: number, i: any) => sum + i.price * i.quantity, 0);
     const total = Math.max(0, subtotal - (discount || 0));
-    const changeAmount = Math.max(0, paymentAmount - total);
 
-    if (paymentAmount < total) return apiError('Insufficient payment amount.');
+    if (!isUtang && paymentAmount < total) return apiError('Insufficient payment amount.');
 
     const txnNumber = generateTransactionNumber();
 
     const result = await db.$transaction(async (tx) => {
-      // Create sale
       const sale = await tx.sale.create({
         data: {
           transactionNumber: txnNumber,
@@ -29,14 +32,15 @@ export async function POST(req: NextRequest) {
           discount: discount || 0,
           total,
           paymentMethod,
-          paymentAmount,
-          changeAmount,
+          paymentAmount: isUtang ? 0 : paymentAmount,
+          changeAmount: isUtang ? 0 : Math.max(0, paymentAmount - total),
+          status: isUtang ? 'CREDIT' : 'COMPLETED',
+          customerName: isUtang ? customerName.trim() : null,
           cashierId: auth.user.id,
         },
       });
 
       for (const item of items) {
-        // Create sale item with denormalized data
         await tx.saleItem.create({
           data: {
             saleId: sale.id,
@@ -50,7 +54,6 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        // Atomically deduct inventory
         const product = await tx.product.findUniqueOrThrow({ where: { id: item.productId } });
         const newQty = product.currentQuantity - item.quantity;
 
@@ -81,12 +84,11 @@ export async function POST(req: NextRequest) {
 
     await createAuditLog({
       userId: auth.user.id, username: auth.user.username,
-      action: 'SALE_COMPLETED', recordType: 'Sale', recordId: result.id,
-      newValue: JSON.stringify({ transactionNumber: txnNumber, total, itemCount: items.length }),
+      action: isUtang ? 'UTANG_SALE' : 'SALE_COMPLETED', recordType: 'Sale', recordId: result.id,
+      newValue: JSON.stringify({ transactionNumber: txnNumber, total, itemCount: items.length, customerName }),
       ipAddress: req.headers.get('x-forwarded-for') || undefined,
     });
 
-    // Fetch complete sale with items
     const completeSale = await db.sale.findUnique({
       where: { id: result.id },
       include: { items: true, cashier: { select: { displayName: true } } },

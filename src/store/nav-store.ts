@@ -10,6 +10,7 @@ export type ViewId =
   | 'expenses'
   | 'suppliers'
   | 'users'
+  | 'utang'
   | 'settings'
   | 'audit';
 

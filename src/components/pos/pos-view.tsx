@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Search, ScanBarcode, Keyboard, Minus, Plus, Trash2, X } from 'lucide-react';
+import { Search, ScanBarcode, Minus, Plus, Trash2, X } from 'lucide-react';
 import { ReceiptDialog } from './receipt-dialog';
 import { BarcodeScanner } from './barcode-scanner';
 
@@ -31,6 +31,7 @@ interface Product {
   costPrice: number;
   currentQuantity: number;
   unit: string;
+  status: string;
 }
 
 interface PaymentMethod {
@@ -48,6 +49,8 @@ interface CompletedSale {
   paymentMethod: string;
   paymentAmount: number;
   changeAmount: number;
+  customerName: string | null;
+  status: string;
   cashier: { displayName: string } | null;
   items: {
     productName: string;
@@ -81,26 +84,61 @@ export function PosView() {
   const [showResults, setShowResults] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [paymentAmount, setPaymentAmount] = useState('');
+  const [customerName, setCustomerName] = useState('');
   const [checkingOut, setCheckingOut] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [completedSale, setCompletedSale] = useState<CompletedSale | null>(null);
   const [showScanner, setShowScanner] = useState(false);
-  const [showManualBarcode, setShowManualBarcode] = useState(false);
-  const [manualBarcode, setManualBarcode] = useState('');
   const [searching, setSearching] = useState(false);
   const [storeName, setStoreName] = useState('My Sari-Sari Store');
 
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scannerBufferRef = useRef<string>('');
+  const scannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch payment methods
   useEffect(() => {
-    apiFetch<PaymentMethod[]>('/api/settings?section=paymentMethods').then((res) => {
-      if (res.data) setPaymentMethods(res.data.filter((m) => m.isActive));
+    apiFetch('/api/settings?section=paymentMethods').then((res) => {
+      if (res.data) setPaymentMethods((res.data as any[]).filter((m: any) => m.isActive));
     });
     apiFetch<Record<string, string>>('/api/settings').then((res) => {
       if (res.data?.storeName) setStoreName(res.data.storeName);
     });
+  }, []);
+
+  // Physical barcode scanner (keyboard wedge) support - listens to rapid keystrokes
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input/textarea (except the search input)
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // Physical barcode scanners send characters rapidly then Enter
+      if (e.key === 'Enter' && scannerBufferRef.current.length >= 3) {
+        e.preventDefault();
+        const barcode = scannerBufferRef.current;
+        scannerBufferRef.current = '';
+        if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+        handlePhysicalBarcode(barcode);
+        return;
+      }
+
+      if (e.key.length === 1) {
+        scannerBufferRef.current += e.key;
+        // Reset buffer after 100ms of no input (not a scanner)
+        if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+        scannerTimeoutRef.current = setTimeout(() => {
+          scannerBufferRef.current = '';
+        }, 100);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+    };
   }, []);
 
   // Close dropdown on outside click
@@ -122,9 +160,11 @@ export function PosView() {
     }
     setSearching(true);
     try {
-      const res = await apiFetch<{ data: Product[] }>('/api/products?search=' + encodeURIComponent(query) + '&limit=10');
+      const res = await apiFetch('/api/products?search=' + encodeURIComponent(query) + '&limit=10');
       if (res.data) {
-        setSearchResults(res.data.data.filter((p) => p.currentQuantity > 0 && p.status === 'ACTIVE') || []);
+        const d = res.data as any;
+        const products: Product[] = d.data || d;
+        setSearchResults(products.filter((p) => p.currentQuantity > 0 && p.status === 'ACTIVE'));
         setShowResults(true);
       }
     } catch {
@@ -160,7 +200,7 @@ export function PosView() {
     searchInputRef.current?.focus();
   };
 
-  const handleBarcodeFound = (product: Product) => {
+  const handleBarcodeFound = (product: any) => {
     addItem({
       productId: product.id,
       name: product.name,
@@ -171,38 +211,40 @@ export function PosView() {
     });
   };
 
-  const handleManualBarcodeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!manualBarcode.trim()) return;
+  const handlePhysicalBarcode = async (barcode: string) => {
     try {
-      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(manualBarcode.trim()));
+      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
       if (res.data && (res.data as any).found) {
         handleBarcodeFound((res.data as any).product);
-        setShowManualBarcode(false);
-        setManualBarcode('');
+        toast.success('Added: ' + (res.data as any).product.name);
       } else {
-        toast.error('Product not found for barcode: ' + manualBarcode);
+        toast.error('Product not found: ' + barcode);
       }
     } catch {
-      toast.error('Failed to look up barcode.');
+      toast.error('Barcode lookup failed.');
     }
   };
 
   const subtotal = getSubtotal();
   const total = getTotal();
   const change = Math.max(0, parseFloat(paymentAmount || '0') - total);
-  const isCash = paymentMethod === 'CASH';
+  const isUtang = paymentMethod === 'UTANG';
+  const isCash = paymentMethod === 'Cash';
 
   const handleCheckout = async () => {
     if (items.length === 0) return;
-    if (isCash && parseFloat(paymentAmount || '0') < total) {
+    if (isUtang && !customerName.trim()) {
+      toast.error('Customer name is required for Utang.');
+      return;
+    }
+    if (!isUtang && parseFloat(paymentAmount || '0') < total) {
       toast.error('Insufficient payment amount.');
       return;
     }
 
     setCheckingOut(true);
     try {
-      const payAmount = isCash ? parseFloat(paymentAmount) : total;
+      const payAmount = isUtang ? 0 : parseFloat(paymentAmount);
       const res = await apiFetch<CompletedSale>('/api/pos/checkout', {
         method: 'POST',
         body: JSON.stringify({
@@ -215,8 +257,9 @@ export function PosView() {
             quantity: i.quantity,
           })),
           discount,
-          paymentMethod,
+          paymentMethod: isUtang ? 'UTANG' : paymentMethod,
           paymentAmount: payAmount,
+          customerName: isUtang ? customerName.trim() : undefined,
         }),
       });
 
@@ -230,6 +273,7 @@ export function PosView() {
         setShowReceipt(true);
         clearCart();
         setPaymentAmount('');
+        setCustomerName('');
       }
     } catch {
       toast.error('Checkout failed. Please try again.');
@@ -240,7 +284,6 @@ export function PosView() {
 
   return (
     <div className="space-y-4">
-      {/* Mobile layout: stacked. Desktop: side by side */}
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
         {/* Left: Search + Cart */}
         <div className="space-y-4">
@@ -251,7 +294,7 @@ export function PosView() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   ref={searchInputRef}
-                  placeholder="Search products by name, barcode, or SKU..."
+                  placeholder="Search products or scan barcode..."
                   value={searchQuery}
                   onChange={(e) => handleSearchChange(e.target.value)}
                   onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
@@ -264,18 +307,9 @@ export function PosView() {
                 size="icon"
                 className="h-11 w-11 shrink-0"
                 onClick={() => setShowScanner(true)}
-                title="Scan Barcode"
+                title="Camera Scan"
               >
                 <ScanBarcode className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-11 w-11 shrink-0"
-                onClick={() => setShowManualBarcode(true)}
-                title="Enter Barcode"
-              >
-                <Keyboard className="h-4 w-4" />
               </Button>
             </div>
 
@@ -290,9 +324,7 @@ export function PosView() {
                   >
                     <div className="text-left">
                       <p className="font-medium">{p.name}</p>
-                      {p.barcode && (
-                        <p className="text-xs text-muted-foreground">{p.barcode}</p>
-                      )}
+                      <p className="text-xs text-muted-foreground">{p.barcode || p.sku || '-'}</p>
                     </div>
                     <div className="text-right shrink-0 ml-3">
                       <p className="font-medium">{formatCurrency(p.sellingPrice)}</p>
@@ -315,12 +347,7 @@ export function PosView() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">Cart ({items.length} item{items.length !== 1 ? 's' : ''})</CardTitle>
                 {items.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs text-destructive hover:text-destructive h-8"
-                    onClick={clearCart}
-                  >
+                  <Button variant="ghost" size="sm" className="text-xs text-destructive hover:text-destructive h-8" onClick={clearCart}>
                     Clear All
                   </Button>
                 )}
@@ -329,53 +356,31 @@ export function PosView() {
             <CardContent className="p-0">
               {items.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
-                  Cart is empty. Search or scan products to add.
+                  Cart is empty. Search or scan products to add.<br />
+                  <span className="text-xs">Physical barcode scanner is also supported.</span>
                 </div>
               ) : (
                 <ScrollArea className="max-h-[40vh] lg:max-h-[50vh]">
                   <div className="px-4 pb-2 space-y-1">
                     {items.map((item) => (
-                      <div
-                        key={item.productId}
-                        className="flex items-center gap-2 py-2 border-b border-border last:border-0"
-                      >
+                      <div key={item.productId} className="flex items-center gap-2 py-2 border-b border-border last:border-0">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium truncate">{item.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatCurrency(item.price)} each
-                          </p>
+                          <p className="text-xs text-muted-foreground">{formatCurrency(item.price)} each</p>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => updateQuantity(item.productId, item.quantity - 1)}
-                          >
+                          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.productId, item.quantity - 1)}>
                             <Minus className="h-3 w-3" />
                           </Button>
-                          <span className="w-8 text-center text-sm font-medium">
-                            {item.quantity}
-                          </span>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => updateQuantity(item.productId, item.quantity + 1)}
-                            disabled={item.quantity >= item.maxQty}
-                          >
+                          <span className="w-8 text-center text-sm font-medium">{item.quantity}</span>
+                          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.productId, item.quantity + 1)} disabled={item.quantity >= item.maxQty}>
                             <Plus className="h-3 w-3" />
                           </Button>
                         </div>
                         <div className="text-right shrink-0 w-20">
                           <p className="text-sm font-medium">{formatCurrency(item.price * item.quantity)}</p>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                          onClick={() => removeItem(item.productId)}
-                        >
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeItem(item.productId)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -384,7 +389,6 @@ export function PosView() {
                 </ScrollArea>
               )}
 
-              {/* Cart totals */}
               {items.length > 0 && (
                 <div className="border-t border-border p-4 space-y-2">
                   <div className="flex justify-between text-sm">
@@ -395,19 +399,8 @@ export function PosView() {
                     <div className="flex items-center justify-between gap-2">
                       <Label htmlFor="pos-discount" className="text-sm text-muted-foreground shrink-0">Discount</Label>
                       <div className="relative w-28">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                          ₱
-                        </span>
-                        <Input
-                          id="pos-discount"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={discount || ''}
-                          onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                          className="pl-7 h-8 text-sm"
-                          placeholder="0.00"
-                        />
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">₱</span>
+                        <Input id="pos-discount" type="number" min="0" step="0.01" value={discount || ''} onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)} className="pl-7 h-8 text-sm" placeholder="0.00" />
                       </div>
                     </div>
                   )}
@@ -429,60 +422,50 @@ export function PosView() {
               <CardTitle className="text-sm font-medium">Payment</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Payment method */}
               <div className="space-y-1.5">
                 <Label className="text-sm">Payment Method</Label>
-                <Select value={paymentMethod} onValueChange={(v) => { setPaymentMethod(v); setPaymentAmount(''); }}>
-                  <SelectTrigger className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
+                <Select value={isUtang ? 'UTANG' : paymentMethod} onValueChange={(v) => { setPaymentMethod(v); setPaymentAmount(''); }}>
+                  <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {paymentMethods.map((m) => (
-                      <SelectItem key={m.id} value={m.name}>
-                        {m.name}
-                      </SelectItem>
+                      <SelectItem key={m.id} value={m.name === 'Utang' ? 'UTANG' : m.name}>{m.name}</SelectItem>
                     ))}
                     {paymentMethods.length === 0 && (
-                      <SelectItem value="CASH">Cash</SelectItem>
+                      <><SelectItem value="Cash">Cash</SelectItem><SelectItem value="UTANG">Utang</SelectItem></>
                     )}
                   </SelectContent>
                 </Select>
               </div>
 
+              {/* Customer name for Utang */}
+              {isUtang && items.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="customer-name" className="text-sm">Customer Name *</Label>
+                  <Input
+                    id="customer-name"
+                    placeholder="Enter customer name"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    className="h-11"
+                  />
+                  <p className="text-xs text-muted-foreground">This sale will be recorded as credit (utang). The customer will pay later.</p>
+                </div>
+              )}
+
               {/* Cash payment amount */}
               {isCash && items.length > 0 && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="payment-amount" className="text-sm">
-                    Amount Tendered
-                  </Label>
+                  <Label htmlFor="payment-amount" className="text-sm">Amount Tendered</Label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                      ₱
-                    </span>
-                    <Input
-                      id="payment-amount"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
-                      className="pl-7 h-11"
-                      placeholder="0.00"
-                    />
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">₱</span>
+                    <Input id="payment-amount" type="number" min="0" step="0.01" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} className="pl-7 h-11" placeholder="0.00" />
                   </div>
-                  {/* Quick amount buttons */}
                   <div className="flex flex-wrap gap-2">
                     {[total, Math.ceil(total / 10) * 10, Math.ceil(total / 50) * 50, Math.ceil(total / 100) * 100, 500, 1000]
                       .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
                       .slice(0, 4)
                       .map((amt) => (
-                        <Button
-                          key={amt}
-                          variant="outline"
-                          size="sm"
-                          className="h-8 text-xs"
-                          onClick={() => setPaymentAmount(amt.toFixed(2))}
-                        >
+                        <Button key={amt} variant="outline" size="sm" className="h-8 text-xs" onClick={() => setPaymentAmount(amt.toFixed(2))}>
                           {formatCurrency(amt)}
                         </Button>
                       ))}
@@ -490,69 +473,35 @@ export function PosView() {
                   {parseFloat(paymentAmount || '0') >= total && parseFloat(paymentAmount || '0') > 0 && (
                     <div className="flex justify-between text-sm bg-emerald-50 dark:bg-emerald-950/30 rounded-md p-2 -mx-1">
                       <span className="text-muted-foreground">Change</span>
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                        {formatCurrency(change)}
-                      </span>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">{formatCurrency(change)}</span>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Complete Sale button */}
+              {/* GCash - just show total */}
+              {paymentMethod === 'GCash' && items.length > 0 && (
+                <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 p-3 -mx-1">
+                  <p className="text-sm text-muted-foreground">GCash Payment</p>
+                  <p className="text-lg font-semibold">{formatCurrency(total)}</p>
+                </div>
+              )}
+
               <Button
                 className="w-full h-12 text-base font-semibold"
-                disabled={items.length === 0 || checkingOut || (isCash && parseFloat(paymentAmount || '0') < total)}
+                disabled={items.length === 0 || checkingOut || (!isUtang && isCash && parseFloat(paymentAmount || '0') < total) || (isUtang && !customerName.trim())}
                 onClick={handleCheckout}
               >
-                {checkingOut ? 'Processing...' : `Complete Sale - ${formatCurrency(total)}`}
+                {checkingOut ? 'Processing...' : isUtang ? `Record Utang - ${formatCurrency(total)}` : `Complete Sale - ${formatCurrency(total)}`}
               </Button>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* Receipt dialog */}
-      <ReceiptDialog
-        open={showReceipt}
-        onOpenChange={setShowReceipt}
-        sale={completedSale}
-        storeName={storeName}
-      />
-
-      {/* Barcode scanner */}
+      <ReceiptDialog open={showReceipt} onOpenChange={setShowReceipt} sale={completedSale} storeName={storeName} />
       {showScanner && (
-        <BarcodeScanner
-          mode="pos"
-          onProductFound={handleBarcodeFound}
-          onClose={() => setShowScanner(false)}
-        />
-      )}
-
-      {/* Manual barcode dialog */}
-      {showManualBarcode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/40" onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }} />
-          <div className="relative z-10 bg-card rounded-lg shadow-xl p-6 w-full max-w-sm mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold">Enter Barcode</h3>
-              <button onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }} className="text-muted-foreground hover:text-foreground">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <form onSubmit={handleManualBarcodeSubmit} className="space-y-3">
-              <Input
-                placeholder="Enter barcode number"
-                value={manualBarcode}
-                onChange={(e) => setManualBarcode(e.target.value)}
-                autoFocus
-              />
-              <div className="flex gap-2">
-                <Button type="submit" className="flex-1" disabled={!manualBarcode.trim()}>Look Up</Button>
-                <Button type="button" variant="outline" onClick={() => { setShowManualBarcode(false); setManualBarcode(''); }}>Cancel</Button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <BarcodeScanner mode="pos" onProductFound={handleBarcodeFound} onClose={() => setShowScanner(false)} />
       )}
     </div>
   );

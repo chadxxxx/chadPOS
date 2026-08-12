@@ -16,6 +16,7 @@ import { ReportsView } from '@/components/reports/reports-view';
 import { ExpensesView } from '@/components/expenses/expenses-view';
 import { SuppliersView } from '@/components/suppliers/suppliers-view';
 import { UsersView } from '@/components/users/users-view';
+import { UtangView } from '@/components/utang/utang-view';
 import { SettingsView } from '@/components/settings/settings-view';
 import { AuditView } from '@/components/audit/audit-view';
 
@@ -52,6 +53,8 @@ export function AppShell() {
         return <SuppliersView />;
       case 'users':
         return <UsersView />;
+      case 'utang':
+        return <UtangView />;
       case 'settings':
         return <SettingsView />;
       case 'audit':

@@ -18,6 +18,7 @@ import {
   Settings,
   FileText,
   LogOut,
+  HandCoins,
 } from 'lucide-react';
 
 interface NavItem {
@@ -37,6 +38,7 @@ const navItems: NavItem[] = [
   { id: 'expenses', label: 'Expenses', icon: Wallet, roles: ['OWNER', 'ADMIN'] },
   { id: 'suppliers', label: 'Suppliers', icon: Truck, roles: ['OWNER', 'ADMIN'] },
   { id: 'users', label: 'Users & Roles', icon: Users, roles: ['OWNER', 'ADMIN'] },
+  { id: 'utang', label: 'Utang (Credit)', icon: HandCoins, roles: ['OWNER', 'ADMIN'] },
   { id: 'settings', label: 'Settings', icon: Settings, roles: ['OWNER', 'ADMIN'] },
   { id: 'audit', label: 'Audit Log', icon: FileText, roles: ['OWNER'] },
 ];

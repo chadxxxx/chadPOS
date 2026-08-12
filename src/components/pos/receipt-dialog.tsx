@@ -28,6 +28,8 @@ interface Sale {
   paymentMethod: string;
   paymentAmount: number;
   changeAmount: number;
+  customerName: string | null;
+  status: string;
   cashier: { displayName: string } | null;
   items: SaleItem[];
 }

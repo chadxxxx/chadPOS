@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
 
     // Seed default payment methods
     await db.paymentMethod.createMany({
-      data: [{ name: 'Cash', sortOrder: 0 }, { name: 'GCash', sortOrder: 1 }],
+      data: [{ name: 'Cash', sortOrder: 0 }, { name: 'GCash', sortOrder: 1 }, { name: 'Utang', sortOrder: 2 }],
     });
 
     // Seed default store settings

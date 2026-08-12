@@ -100,6 +100,10 @@ export function ProductFormDialog({ open, onOpenChange, product, onSaved }: Prod
 
   const updateField = (key: string, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+    // Auto-fill SKU from barcode
+    if (key === 'barcode' && value.trim() && !form.sku) {
+      setForm((prev) => ({ ...prev, sku: value.trim() }));
+    }
   };
 
   const validate = () => {
