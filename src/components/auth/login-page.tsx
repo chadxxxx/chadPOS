@@ -6,7 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Eye, EyeOff } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Eye, EyeOff, ArrowLeft, KeyRound, CheckCircle2, AlertCircle } from 'lucide-react';
+
+type RecoveryStep = 'username' | 'code' | 'success';
 
 export function LoginPage() {
   const { isSetupComplete, loginError, setup, login, clearError } = useAuthStore();
@@ -17,6 +20,17 @@ export function LoginPage() {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Forgot password state
+  const [showForgot, setShowForgot] = useState(false);
+  const [recoveryStep, setRecoveryStep] = useState<RecoveryStep>('username');
+  const [recoveryUsername, setRecoveryUsername] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
+  const [recoverySubmitting, setRecoverySubmitting] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +53,81 @@ export function LoginPage() {
     if (!ok) {
       setTimeout(clearError, 5000);
     }
+  };
+
+  const openForgotPassword = () => {
+    setRecoveryUsername('');
+    setRecoveryCode('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setRecoveryError('');
+    setRecoveryStep('username');
+    setShowForgot(true);
+  };
+
+  const closeForgotPassword = () => {
+    setShowForgot(false);
+    setRecoveryError('');
+  };
+
+  const handleRecoveryUsername = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoveryUsername.trim()) return;
+    setRecoveryError('');
+    setRecoveryStep('code');
+  };
+
+  const handleRecoverySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoveryCode.trim()) {
+      setRecoveryError('Please enter a recovery code.');
+      return;
+    }
+    if (!newPassword || newPassword.length < 8) {
+      setRecoveryError('Password must be at least 8 characters.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setRecoveryError('Passwords do not match.');
+      return;
+    }
+
+    setRecoverySubmitting(true);
+    setRecoveryError('');
+
+    try {
+      const res = await fetch('/api/auth/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: recoveryUsername.trim(),
+          code: recoveryCode.trim(),
+          newPassword,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (json.error) {
+        setRecoveryError(json.error);
+        setRecoverySubmitting(false);
+        return;
+      }
+
+      setRecoveryStep('success');
+    } catch {
+      setRecoveryError('Network error. Please try again.');
+    } finally {
+      setRecoverySubmitting(false);
+    }
+  };
+
+  const handleRecoverySuccess = () => {
+    setShowForgot(false);
+    setRecoveryStep('username');
+    // Pre-fill the username on the login form
+    setUsername(recoveryUsername.trim());
+    setPassword('');
   };
 
   const setupError = !isSetupComplete
@@ -185,7 +274,8 @@ export function LoginPage() {
               <div className="text-center">
                 <button
                   type="button"
-                  className="text-sm text-muted-foreground hover:text-foreground"
+                  className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  onClick={openForgotPassword}
                 >
                   Forgot Password?
                 </button>
@@ -194,6 +284,148 @@ export function LoginPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Forgot Password Dialog */}
+      <Dialog open={showForgot} onOpenChange={(open) => { if (!open) closeForgotPassword(); }}>
+        <DialogContent className="sm:max-w-md">
+          {recoveryStep === 'username' && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <KeyRound className="h-5 w-5" />
+                  Forgot Password
+                </DialogTitle>
+                <DialogDescription>
+                  Enter your username to start the recovery process. You will need a recovery code that was generated from the Account Recovery settings.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleRecoveryUsername} className="space-y-4 mt-2">
+                <div className="space-y-2">
+                  <Label htmlFor="recovery-username">Username</Label>
+                  <Input
+                    id="recovery-username"
+                    placeholder="Enter your username"
+                    value={recoveryUsername}
+                    onChange={(e) => setRecoveryUsername(e.target.value)}
+                    required
+                    autoFocus
+                  />
+                </div>
+                {recoveryError && (
+                  <p className="text-sm text-destructive flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5" /> {recoveryError}
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" className="flex-1" onClick={closeForgotPassword}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" className="flex-1">
+                    Continue
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {recoveryStep === 'code' && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <KeyRound className="h-5 w-5" />
+                  Enter Recovery Code
+                </DialogTitle>
+                <DialogDescription>
+                  Enter one of your recovery codes and choose a new password for <strong>{recoveryUsername}</strong>.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleRecoverySubmit} className="space-y-4 mt-2">
+                <div className="space-y-2">
+                  <Label htmlFor="recovery-code">Recovery Code</Label>
+                  <Input
+                    id="recovery-code"
+                    placeholder="e.g. A1B2-C3D4-E5F6"
+                    value={recoveryCode}
+                    onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
+                    required
+                    autoFocus
+                    className="font-mono tracking-wider"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Recovery codes were generated in Settings &gt; Account Recovery.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">New Password</Label>
+                  <div className="relative">
+                    <Input
+                      id="new-password"
+                      type={showNewPassword ? 'text' : 'password'}
+                      placeholder="At least 8 characters"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      tabIndex={-1}
+                    >
+                      {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-new-password">Confirm New Password</Label>
+                  <Input
+                    id="confirm-new-password"
+                    type={showNewPassword ? 'text' : 'password'}
+                    placeholder="Re-enter your new password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    required
+                    autoComplete="new-password"
+                  />
+                </div>
+                {recoveryError && (
+                  <p className="text-sm text-destructive flex items-center gap-1">
+                    <AlertCircle className="h-3.5 w-3.5" /> {recoveryError}
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" className="flex-1" onClick={() => { setRecoveryError(''); setRecoveryStep('username'); }}>
+                    <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                  </Button>
+                  <Button type="submit" className="flex-1" disabled={recoverySubmitting}>
+                    {recoverySubmitting ? 'Resetting...' : 'Reset Password'}
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {recoveryStep === 'success' && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 text-green-600">
+                  <CheckCircle2 className="h-5 w-5" />
+                  Password Reset Successful
+                </DialogTitle>
+                <DialogDescription>
+                  Your password has been changed. You can now sign in with your new password.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="mt-4">
+                <Button className="w-full" onClick={handleRecoverySuccess}>
+                  Back to Sign In
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
