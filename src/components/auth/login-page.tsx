@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/store/auth-store';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,9 +10,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Eye, EyeOff, ArrowLeft, KeyRound, CheckCircle2, AlertCircle } from 'lucide-react';
 
 type RecoveryStep = 'username' | 'code' | 'success';
+type AuthView = 'login' | 'create';
 
 export function LoginPage() {
   const { isSetupComplete, loginError, setup, login, clearError } = useAuthStore();
+
+  // Default to login if setup done, create if not
+  const [view, setView] = useState<AuthView>('login');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -31,6 +35,21 @@ export function LoginPage() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const [recoverySubmitting, setRecoverySubmitting] = useState(false);
+
+  // Set default view based on setup status once it's known
+  useEffect(() => {
+    if (isSetupComplete) {
+      setView('login');
+    }
+  }, [isSetupComplete]);
+
+  const switchView = (target: AuthView) => {
+    // Clear errors and form when switching
+    clearError();
+    setPassword('');
+    setConfirmPassword('');
+    setView(target);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,111 +144,60 @@ export function LoginPage() {
   const handleRecoverySuccess = () => {
     setShowForgot(false);
     setRecoveryStep('username');
-    // Pre-fill the username on the login form
     setUsername(recoveryUsername.trim());
     setPassword('');
   };
 
-  const setupError = !isSetupComplete
-    ? password !== confirmPassword
-      ? 'Passwords do not match.'
-      : password.length > 0 && password.length < 8
-        ? 'Password must be at least 8 characters.'
-        : ''
-    : '';
+  const setupFormError = password !== confirmPassword
+    ? 'Passwords do not match.'
+    : password.length > 0 && password.length < 8
+      ? 'Password must be at least 8 characters.'
+      : '';
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CardTitle className="text-xl font-semibold tracking-tight">
-            {isSetupComplete ? 'Sign In' : 'Store Setup'}
+            Sari-Sari Store POS
           </CardTitle>
           <CardDescription>
-            {isSetupComplete
-              ? 'Enter your credentials to access the POS system.'
-              : 'Create your owner account to get started.'}
+            {view === 'login'
+              ? 'Enter your credentials to access the system.'
+              : isSetupComplete
+                ? 'The store is already set up. Ask the owner for your account.'
+                : 'Create your owner account to get started.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {!isSetupComplete ? (
-            <form onSubmit={handleSetup} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="setup-username">Username</Label>
-                <Input
-                  id="setup-username"
-                  placeholder="e.g. owner"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                  autoComplete="username"
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="setup-displayname">Display Name</Label>
-                <Input
-                  id="setup-displayname"
-                  placeholder="e.g. Juan Dela Cruz"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  required
-                  autoComplete="name"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="setup-password">Password</Label>
-                <div className="relative">
-                  <Input
-                    id="setup-password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="At least 8 characters"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowPassword(!showPassword)}
-                    tabIndex={-1}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="setup-confirm">Confirm Password</Label>
-                <Input
-                  id="setup-confirm"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Re-enter your password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  autoComplete="new-password"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="setup-email">Recovery Email (optional)</Label>
-                <Input
-                  id="setup-email"
-                  type="email"
-                  placeholder="your@email.com"
-                  value={recoveryEmail}
-                  onChange={(e) => setRecoveryEmail(e.target.value)}
-                  autoComplete="email"
-                />
-              </div>
-              {(loginError || setupError) && (
-                <p className="text-sm text-destructive">{loginError || setupError}</p>
-              )}
-              <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting ? 'Creating Account...' : 'Create Account & Sign In'}
-              </Button>
-            </form>
-          ) : (
+          {/* Tab switcher */}
+          <div className="flex rounded-lg bg-muted p-1 mb-5">
+            <button
+              type="button"
+              className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
+                view === 'login'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => switchView('login')}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              className={`flex-1 rounded-md py-2 text-sm font-medium transition-colors ${
+                view === 'create'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => switchView('create')}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {/* LOGIN FORM */}
+          {view === 'login' && (
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="login-username">Username</Label>
@@ -281,6 +249,102 @@ export function LoginPage() {
                 </button>
               </div>
             </form>
+          )}
+
+          {/* CREATE ACCOUNT FORM */}
+          {view === 'create' && (
+            <>
+              {isSetupComplete ? (
+                <div className="text-center space-y-4 py-4">
+                  <div className="mx-auto w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                    <AlertCircle className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    The store has already been set up. Please ask the store owner to create an account for you.
+                  </p>
+                  <Button variant="outline" className="w-full" onClick={() => switchView('login')}>
+                    Back to Sign In
+                  </Button>
+                </div>
+              ) : (
+                <form onSubmit={handleSetup} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="setup-username">Username</Label>
+                    <Input
+                      id="setup-username"
+                      placeholder="e.g. owner"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      required
+                      autoComplete="username"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="setup-displayname">Display Name</Label>
+                    <Input
+                      id="setup-displayname"
+                      placeholder="e.g. Juan Dela Cruz"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      required
+                      autoComplete="name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="setup-password">Password</Label>
+                    <div className="relative">
+                      <Input
+                        id="setup-password"
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="At least 8 characters"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowPassword(!showPassword)}
+                        tabIndex={-1}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="setup-confirm">Confirm Password</Label>
+                    <Input
+                      id="setup-confirm"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Re-enter your password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="setup-email">Recovery Email (optional)</Label>
+                    <Input
+                      id="setup-email"
+                      type="email"
+                      placeholder="your@email.com"
+                      value={recoveryEmail}
+                      onChange={(e) => setRecoveryEmail(e.target.value)}
+                      autoComplete="email"
+                    />
+                  </div>
+                  {(loginError || setupFormError) && (
+                    <p className="text-sm text-destructive">{loginError || setupFormError}</p>
+                  )}
+                  <Button type="submit" className="w-full" disabled={submitting}>
+                    {submitting ? 'Creating Account...' : 'Create Account & Sign In'}
+                  </Button>
+                </form>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
