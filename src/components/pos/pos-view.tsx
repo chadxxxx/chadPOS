@@ -18,8 +18,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Search, ScanBarcode, Minus, Plus, Trash2, X } from 'lucide-react';
+import { Search, ScanBarcode, Minus, Plus, Trash2, PackagePlus, AlertTriangle } from 'lucide-react';
 import { ReceiptDialog } from './receipt-dialog';
 import { BarcodeScanner } from './barcode-scanner';
 
@@ -61,6 +69,8 @@ interface CompletedSale {
   }[];
 }
 
+/* ------------------------------------------------------------------ */
+
 export function PosView() {
   const {
     items,
@@ -93,19 +103,34 @@ export function PosView() {
   const [searching, setSearching] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [storeName, setStoreName] = useState('My Sari-Sari Store');
+  const [scannerBusy, setScannerBusy] = useState(false);
+
+  // "Product not found" dialog state
+  const [notFoundBarcode, setNotFoundBarcode] = useState('');
+  const [showNotFoundDialog, setShowNotFoundDialog] = useState(false);
+
+  // Quick-add product dialog state
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [quickAddBarcode, setQuickAddBarcode] = useState('');
+  const [quickAddForm, setQuickAddForm] = useState({
+    name: '',
+    costPrice: '',
+    sellingPrice: '',
+    unit: 'pc',
+  });
+  const [quickAddSaving, setQuickAddSaving] = useState(false);
 
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const scannerBufferRef = useRef<string>('');
   const scannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch payment methods
+  // Fetch payment methods & store name
   useEffect(() => {
     apiFetch('/api/settings?section=paymentMethods').then((res) => {
       if (res.data) {
         const methods = (res.data as any[]).filter((m: any) => m.isActive);
         setPaymentMethods(methods);
-        // If no methods configured, use defaults including Utang
         if (methods.length === 0) {
           setPaymentMethods([
             { id: 'default-cash', name: 'Cash', isActive: true },
@@ -120,26 +145,23 @@ export function PosView() {
     });
   }, []);
 
-  // Physical barcode scanner (keyboard wedge) support - listens to rapid keystrokes
+  // Physical barcode scanner (keyboard wedge) support
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in an input/textarea (except the search input)
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      // Physical barcode scanners send characters rapidly then Enter
       if (e.key === 'Enter' && scannerBufferRef.current.length >= 3) {
         e.preventDefault();
         const barcode = scannerBufferRef.current;
         scannerBufferRef.current = '';
         if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
-        handlePhysicalBarcode(barcode);
+        handleBarcodeLookup(barcode);
         return;
       }
 
       if (e.key.length === 1) {
         scannerBufferRef.current += e.key;
-        // Reset buffer after 100ms of no input (not a scanner)
         if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
         scannerTimeoutRef.current = setTimeout(() => {
           scannerBufferRef.current = '';
@@ -173,7 +195,6 @@ export function PosView() {
     }
     setSearching(true);
     try {
-      // Always request ACTIVE status from API to avoid archived/inactive products
       const res = await apiFetch('/api/products?search=' + encodeURIComponent(query) + '&status=ACTIVE&limit=20');
       if (res.data) {
         const d = res.data as any;
@@ -188,7 +209,6 @@ export function PosView() {
     }
   }, []);
 
-  // Browse all in-stock products
   const browseProducts = useCallback(async () => {
     setBrowsing(true);
     setSearching(true);
@@ -238,32 +258,77 @@ export function PosView() {
     searchInputRef.current?.focus();
   };
 
-  const handleBarcodeFound = (product: any) => {
-    if (product.currentQuantity <= 0) {
-      toast.error('Product is out of stock: ' + product.name);
-      return;
-    }
-    addItem({
-      productId: product.id,
-      name: product.name,
-      barcode: product.barcode,
-      price: product.sellingPrice,
-      costPrice: product.costPrice,
-      maxQty: product.currentQuantity,
-    });
-    toast.success('Added: ' + product.name);
-  };
-
-  const handlePhysicalBarcode = async (barcode: string) => {
+  /* ---- Barcode lookup (from scanner or physical wedge) ---- */
+  const handleBarcodeLookup = async (barcode: string) => {
+    if (scannerBusy) return;
+    setScannerBusy(true);
     try {
       const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
       if (res.data && (res.data as any).found) {
-        handleBarcodeFound((res.data as any).product);
+        const product = (res.data as any).product as Product;
+        if (product.currentQuantity <= 0) {
+          toast.error('Product is out of stock: ' + product.name);
+        } else {
+          addItem({
+            productId: product.id,
+            name: product.name,
+            barcode: product.barcode,
+            price: product.sellingPrice,
+            costPrice: product.costPrice,
+            maxQty: product.currentQuantity,
+          });
+          toast.success('Added: ' + product.name);
+        }
       } else {
-        toast.error('Product not found: ' + barcode);
+        // Product not found — show dialog with option to create
+        setNotFoundBarcode(barcode.trim());
+        setShowNotFoundDialog(true);
       }
     } catch {
       toast.error('Barcode lookup failed.');
+    } finally {
+      setTimeout(() => setScannerBusy(false), 1000);
+    }
+  };
+
+  /* ---- Quick-add product from not-found dialog ---- */
+  const openQuickAdd = () => {
+    setQuickAddBarcode(notFoundBarcode);
+    setQuickAddForm({ name: '', costPrice: '', sellingPrice: '', unit: 'pc' });
+    setShowNotFoundDialog(false);
+    setShowQuickAdd(true);
+  };
+
+  const handleQuickAddSave = async () => {
+    if (!quickAddForm.name.trim()) { toast.error('Product name is required.'); return; }
+    if (!quickAddForm.costPrice || isNaN(parseFloat(quickAddForm.costPrice))) { toast.error('Valid cost price is required.'); return; }
+    if (!quickAddForm.sellingPrice || isNaN(parseFloat(quickAddForm.sellingPrice))) { toast.error('Valid selling price is required.'); return; }
+
+    setQuickAddSaving(true);
+    try {
+      const res = await apiFetch('/api/products', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: quickAddForm.name.trim(),
+          barcode: quickAddBarcode || null,
+          sku: quickAddBarcode || null,
+          costPrice: parseFloat(quickAddForm.costPrice),
+          sellingPrice: parseFloat(quickAddForm.sellingPrice),
+          currentQuantity: 0,
+          unit: quickAddForm.unit,
+        }),
+      });
+      if (res.error) { toast.error(res.error); return; }
+      toast.success('Product created! You can now scan it.');
+      setShowQuickAdd(false);
+      // Look it up again to add to cart
+      if (quickAddBarcode) {
+        await handleBarcodeLookup(quickAddBarcode);
+      }
+    } catch {
+      toast.error('Failed to create product.');
+    } finally {
+      setQuickAddSaving(false);
     }
   };
 
@@ -305,10 +370,7 @@ export function PosView() {
         }),
       });
 
-      if (res.error) {
-        toast.error(res.error);
-        return;
-      }
+      if (res.error) { toast.error(res.error); return; }
 
       if (res.data) {
         setCompletedSale(res.data);
@@ -329,14 +391,14 @@ export function PosView() {
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
         {/* Left: Search + Cart */}
         <div className="space-y-4">
-          {/* Search bar */}
+          {/* Search bar with manual barcode input */}
           <div className="relative" ref={searchRef}>
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   ref={searchInputRef}
-                  placeholder="Search products or scan barcode..."
+                  placeholder="Search products…"
                   value={searchQuery}
                   onChange={(e) => handleSearchChange(e.target.value)}
                   onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
@@ -358,10 +420,47 @@ export function PosView() {
                 size="icon"
                 className="h-11 w-11 shrink-0"
                 onClick={() => setShowScanner(true)}
-                title="Camera Scan"
+                title="Camera Barcode Scanner"
               >
                 <ScanBarcode className="h-4 w-4" />
               </Button>
+            </div>
+            {/* Manual barcode input below search */}
+            <div className="mt-1.5">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Type barcode number and press Enter…"
+                  className="h-9 text-xs"
+                  value={scannerBusy ? '' : undefined}
+                  disabled={scannerBusy}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      if (val.length >= 3) {
+                        e.preventDefault();
+                        (e.target as HTMLInputElement).value = '';
+                        handleBarcodeLookup(val);
+                      }
+                    }
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 px-2 text-xs text-muted-foreground shrink-0"
+                  disabled={scannerBusy}
+                  onClick={() => {
+                    const input = searchRef.current?.querySelector('input[type=text]:not([placeholder*=Search])') as HTMLInputElement;
+                    const val = input?.value?.trim();
+                    if (val && val.length >= 3) {
+                      input.value = '';
+                      handleBarcodeLookup(val);
+                    }
+                  }}
+                >
+                  Look Up
+                </Button>
+              </div>
             </div>
 
             {/* Search results dropdown */}
@@ -410,7 +509,7 @@ export function PosView() {
               {items.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   Cart is empty. Search, browse, or scan products to add.<br />
-                  <span className="text-xs">Physical barcode scanner is also supported.</span>
+                  <span className="text-xs">Physical barcode scanner also supported.</span>
                 </div>
               ) : (
                 <ScrollArea className="max-h-[40vh] lg:max-h-[50vh]">
@@ -487,7 +586,6 @@ export function PosView() {
                 </Select>
               </div>
 
-              {/* Customer name for Utang */}
               {isUtang && items.length > 0 && (
                 <div className="space-y-1.5">
                   <Label htmlFor="customer-name" className="text-sm">Customer Name *</Label>
@@ -504,7 +602,6 @@ export function PosView() {
                 </div>
               )}
 
-              {/* Cash payment amount */}
               {isCash && items.length > 0 && (
                 <div className="space-y-1.5">
                   <Label htmlFor="payment-amount" className="text-sm">Amount Tendered</Label>
@@ -531,7 +628,6 @@ export function PosView() {
                 </div>
               )}
 
-              {/* GCash - just show total */}
               {paymentMethod === 'GCash' && items.length > 0 && (
                 <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 p-3 -mx-1">
                   <p className="text-sm text-muted-foreground">GCash Payment</p>
@@ -551,10 +647,107 @@ export function PosView() {
         </div>
       </div>
 
+      {/* Receipt dialog */}
       <ReceiptDialog open={showReceipt} onOpenChange={setShowReceipt} sale={completedSale} storeName={storeName} />
+
+      {/* Camera barcode scanner */}
       {showScanner && (
-        <BarcodeScanner mode="pos" onProductFound={handleBarcodeFound} onClose={() => setShowScanner(false)} />
+        <BarcodeScanner
+          mode="pos"
+          onBarcodeDetected={handleBarcodeLookup}
+          onClose={() => setShowScanner(false)}
+        />
       )}
+
+      {/* Product Not Found dialog */}
+      <Dialog open={showNotFoundDialog} onOpenChange={setShowNotFoundDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Product Not Found
+            </DialogTitle>
+            <DialogDescription>
+              No product matches barcode <strong className="font-mono">{notFoundBarcode}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md bg-muted p-3 text-center">
+              <p className="font-mono text-lg font-semibold tracking-wider">{notFoundBarcode}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowNotFoundDialog(false)}>
+                Dismiss
+              </Button>
+              <Button className="flex-1" onClick={openQuickAdd}>
+                <PackagePlus className="h-4 w-4 mr-1.5" />
+                Create Product
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick-Add Product dialog */}
+      <Dialog open={showQuickAdd} onOpenChange={setShowQuickAdd}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackagePlus className="h-5 w-5" />
+              Register New Product
+            </DialogTitle>
+            <DialogDescription>
+              Barcode <strong className="font-mono">{quickAddBarcode}</strong> will be assigned automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="qa-name">Product Name *</Label>
+              <Input
+                id="qa-name"
+                placeholder="e.g. Lucky Me Pancit Canton"
+                value={quickAddForm.name}
+                onChange={(e) => setQuickAddForm((f) => ({ ...f, name: e.target.value }))}
+                autoFocus
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="qa-cost">Cost Price *</Label>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₱</span>
+                  <Input
+                    id="qa-cost"
+                    type="number" min="0" step="0.01" className="pl-6 h-10 text-sm"
+                    placeholder="0.00"
+                    value={quickAddForm.costPrice}
+                    onChange={(e) => setQuickAddForm((f) => ({ ...f, costPrice: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="qa-selling">Selling Price *</Label>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₱</span>
+                  <Input
+                    id="qa-selling"
+                    type="number" min="0" step="0.01" className="pl-6 h-10 text-sm"
+                    placeholder="0.00"
+                    value={quickAddForm.sellingPrice}
+                    onChange={(e) => setQuickAddForm((f) => ({ ...f, sellingPrice: e.target.value }))}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end pt-1">
+              <Button variant="outline" onClick={() => setShowQuickAdd(false)}>Cancel</Button>
+              <Button onClick={handleQuickAddSave} disabled={quickAddSaving}>
+                {quickAddSaving ? 'Creating…' : 'Create & Add to Cart'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
