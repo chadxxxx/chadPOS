@@ -88,7 +88,6 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const readerRef = useRef<any>(null);
-  const scanControlsRef = useRef<any>(null);
   const cooldownRef = useRef(false);
   const mountedRef = useRef(true);
 
@@ -138,11 +137,7 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
 
   /* ---- stop camera stream ---- */
   const stopStream = useCallback(() => {
-    // Stop ZXing scanning first
-    if (scanControlsRef.current) {
-      try { scanControlsRef.current.stop(); } catch { /* ignore */ }
-      scanControlsRef.current = null;
-    }
+    // Stop ZXing scanning via reset (stops internal rAF loop)
     if (readerRef.current) {
       try { readerRef.current.reset(); } catch { /* ignore */ }
       readerRef.current = null;
@@ -164,8 +159,8 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
     cooldownRef.current = true;
     setTimeout(() => { cooldownRef.current = false; }, COOLDOWN_MS);
 
-    const format = result?.getFormatName?.() || result?.format?.formatName || 'Unknown';
-    const text = result?.getText?.() || result?.text || String(result);
+    const format = String(result?.getBarcodeFormat?.() || 'Unknown');
+    const text = result?.getText?.() || String(result);
 
     playBeep();
     vibrate();
@@ -235,17 +230,17 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         addError('Camera stream acquired: ' + stream.getVideoTracks().length + ' track(s)');
         setPermissionStatus('granted');
 
-        // Step 5: Attach stream to video element
+        // Step 5: Attach stream to video element (don't play it ourselves
+        // — the ZXing library handles play() via playVideoOnLoadAsync,
+        // and calling play() before the library sets up its 'playing' listener
+        // would cause the promise to hang forever)
         const video = videoRef.current;
         if (!video) {
           throw new Error('Video element not found in DOM');
         }
         video.srcObject = stream;
-        video.setAttribute('playsinline', '');
-        video.setAttribute('autoplay', '');
-        await video.play();
 
-        addError('Video playing: ' + video.videoWidth + 'x' + video.videoHeight);
+        addError('Stream attached, starting scanner...');
 
         // Step 6: Re-enumerate to get labels now that we have permission
         const updatedCams = await enumerateCameras();
@@ -253,13 +248,14 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         const activeDeviceId = activeTrack?.getSettings()?.deviceId;
         setSelectedCameraId(activeDeviceId || targetDeviceId);
 
-        // Step 7: Start continuous scanning via ZXing decodeFromVideoElement
+        // Step 7: Start continuous scanning via ZXing
         addError('Starting ZXing continuous scan...');
-        const controls = reader.decodeFromVideoElement(video, (result: any, err: any) => {
-          if (err) return; // NotFoundException on every non-detect frame, normal
+        await reader.decodeFromVideoElementContinuously(video, (result: any, error: any) => {
+          // error is NotFoundException when no barcode found in frame (normal)
+          // result is a Result object when a barcode IS found
+          if (error) return;
           if (result) handleDetection(result);
         });
-        scanControlsRef.current = controls;
         setScannerState('scanning');
         addError('Scanner active - waiting for barcode');
 
@@ -444,7 +440,6 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
                   ref={videoRef}
                   muted
                   playsInline
-                  autoPlay
                   className="w-full h-auto block"
                   style={{
                     minHeight: 240,
