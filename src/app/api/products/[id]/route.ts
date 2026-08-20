@@ -58,7 +58,7 @@ export async function PUT(
 
     if (barcode !== undefined) {
       if (barcode && barcode !== existing.barcode) {
-        const dup = await db.product.findUnique({ where: { barcode } });
+        const dup = await db.product.findFirst({ where: { barcode, id: { not: id } } });
         if (dup) return apiError('A product with this barcode already exists.');
       }
       updateData.barcode = barcode || null;

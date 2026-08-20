@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (barcode) {
-      const existing = await db.product.findUnique({ where: { barcode } });
+      const existing = await db.product.findFirst({ where: { barcode } });
       if (existing) return apiError('A product with this barcode already exists.');
     }
 
