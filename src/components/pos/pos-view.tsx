@@ -262,6 +262,8 @@ export function PosView() {
   const handleBarcodeLookup = async (barcode: string) => {
     if (scannerBusy) return;
     setScannerBusy(true);
+    // Close the scanner dialog so the user can see results
+    setShowScanner(false);
     try {
       const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
       if (res.data && (res.data as any).found) {
@@ -291,6 +293,29 @@ export function PosView() {
     }
   };
 
+  /* ---- Barcode lookup without busy guard (for internal use after creation) ---- */
+  const handleBarcodeLookupDirect = async (barcode: string) => {
+    try {
+      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
+      if (res.data && (res.data as any).found) {
+        const product = (res.data as any).product as Product;
+        addItem({
+          productId: product.id,
+          name: product.name,
+          barcode: product.barcode,
+          price: product.sellingPrice,
+          costPrice: product.costPrice,
+          maxQty: Math.max(product.currentQuantity, 1),
+        });
+        toast.success('Created & added: ' + product.name);
+      } else {
+        toast.error('Product was created but could not be found for cart. Try scanning again.');
+      }
+    } catch {
+      toast.error('Lookup after creation failed.');
+    }
+  };
+
   /* ---- Quick-add product from not-found dialog ---- */
   const openQuickAdd = () => {
     setQuickAddBarcode(notFoundBarcode);
@@ -314,16 +339,16 @@ export function PosView() {
           sku: quickAddBarcode || null,
           costPrice: parseFloat(quickAddForm.costPrice),
           sellingPrice: parseFloat(quickAddForm.sellingPrice),
-          currentQuantity: 0,
+          currentQuantity: 1,
           unit: quickAddForm.unit,
         }),
       });
       if (res.error) { toast.error(res.error); return; }
-      toast.success('Product created! You can now scan it.');
       setShowQuickAdd(false);
-      // Look it up again to add to cart
+      // Directly add to cart (bypasses scannerBusy guard and stock=0 issue)
       if (quickAddBarcode) {
-        await handleBarcodeLookup(quickAddBarcode);
+        setScannerBusy(false);
+        await handleBarcodeLookupDirect(quickAddBarcode);
       }
     } catch {
       toast.error('Failed to create product.');
