@@ -97,7 +97,32 @@ export function SettingsView() {
     setCodesDialog(true);
   };
 
-  const downloadExport = (type: string) => { window.open(`/api/reports/export?type=${type}`, '_blank'); };
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  const downloadExport = async (type: string) => {
+    setExporting(type);
+    try {
+      const token = sessionStorage.getItem('session_token');
+      const res = await fetch(`/api/reports/export?type=${type}`, {
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+      });
+      if (!res.ok) { toast.error('Export failed. Please try again.'); setExporting(null); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${type}_export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`${type.charAt(0).toUpperCase() + type.slice(1)} exported successfully.`);
+    } catch {
+      toast.error('Export failed. Check your connection.');
+    } finally {
+      setExporting(null);
+    }
+  };
 
   if (loading) return <div className='space-y-2'><Skeleton className='h-10 w-full' /><Skeleton className='h-10 w-full' /></div>;
 
@@ -141,7 +166,7 @@ export function SettingsView() {
         </TabsContent>
 
         <TabsContent value='data' className='space-y-4 mt-3'>
-          <div className='max-w-lg'><p className='text-sm text-muted-foreground mb-3'>Export your business data for record-keeping or backup. Files are in CSV format.</p><div className='grid grid-cols-2 gap-3'>{['sales', 'products', 'inventory', 'expenses'].map((type) => (<Button key={type} variant='outline' className='h-auto py-3' onClick={() => downloadExport(type)}><Download className='h-4 w-4 mr-2' />{type.charAt(0).toUpperCase() + type.slice(1)}</Button>))}</div></div>
+          <div className='max-w-lg'><p className='text-sm text-muted-foreground mb-3'>Export your business data for record-keeping or backup. Files are in CSV format.</p><div className='grid grid-cols-2 gap-3'>{['sales', 'products', 'inventory', 'expenses'].map((type) => (<Button key={type} variant='outline' className='h-auto py-3' disabled={exporting === type} onClick={() => downloadExport(type)}><Download className='h-4 w-4 mr-2' />{exporting === type ? 'Exporting...' : type.charAt(0).toUpperCase() + type.slice(1)}</Button>))}</div></div>
         </TabsContent>
       </Tabs>
 

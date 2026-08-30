@@ -15,7 +15,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Search, Banknote, Users, CheckCircle2 } from 'lucide-react';
+import { Separator } from '@/components/ui/separator';
+import { Search, Banknote, Users, CheckCircle2, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface UtangSale {
@@ -36,6 +37,35 @@ interface UtangSummary {
   uniquePendingCustomers: number;
 }
 
+interface InvoiceItem {
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+interface InvoiceData {
+  sale: {
+    id: string;
+    transactionNumber: string;
+    date: string;
+    customerName: string | null;
+    total: number;
+    subtotal: number;
+    discount: number;
+    status: string;
+    items: InvoiceItem[];
+    utangPaidAt: string | null;
+    utangPaidByUser: { id: string; displayName: string } | null;
+    cashier: { displayName: string } | null;
+  };
+  storeInfo: {
+    storeName?: string;
+    storeAddress?: string;
+    storeContact?: string;
+  };
+}
+
 type FilterTab = 'all' | 'pending' | 'paid';
 
 export function UtangView() {
@@ -53,6 +83,11 @@ export function UtangView() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [paying, setPaying] = useState(false);
   const limit = 20;
+
+  // Invoice state
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
 
   const fetchUtang = useCallback(async () => {
     setLoading(true);
@@ -90,6 +125,15 @@ export function UtangView() {
   const handlePayClick = (sale: UtangSale) => {
     setPayingId(sale.id);
     setConfirmOpen(true);
+  };
+
+  const handleInvoiceClick = async (saleId: string) => {
+    setInvoiceLoading(true);
+    setInvoiceOpen(true);
+    const res = await apiFetch(`/api/utang/${saleId}`);
+    setInvoiceLoading(false);
+    if (res.error) { toast.error(res.error); setInvoiceOpen(false); return; }
+    setInvoiceData(res.data as InvoiceData);
   };
 
   const handleConfirmPay = async () => {
@@ -226,23 +270,32 @@ export function UtangView() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {sale.status === 'CREDIT' && canPay ? (
+                      <div className="flex items-center gap-1">
                         <Button
                           size="sm"
-                          variant="outline"
-                          className="text-green-600 border-green-300 hover:bg-green-50"
-                          onClick={() => handlePayClick(sale)}
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => handleInvoiceClick(sale.id)}
                         >
-                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                          Mark Paid
+                          <FileText className="h-3.5 w-3.5 mr-1" />
+                          Invoice
                         </Button>
-                      ) : sale.status === 'COMPLETED' && sale.utangPaidAt ? (
-                        <span className="text-xs text-muted-foreground">
-                          Paid by {sale.utangPaidByUser?.displayName || 'Unknown'}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">-</span>
-                      )}
+                        {sale.status === 'CREDIT' && canPay ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-green-600 border-green-300 hover:bg-green-50 text-xs"
+                            onClick={() => handlePayClick(sale)}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                            Pay
+                          </Button>
+                        ) : sale.status === 'COMPLETED' && sale.utangPaidAt ? (
+                          <span className="text-xs text-muted-foreground">
+                            Paid by {sale.utangPaidByUser?.displayName || 'Unknown'}
+                          </span>
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
@@ -298,6 +351,131 @@ export function UtangView() {
               {paying ? 'Processing...' : 'Confirm Payment'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Invoice Dialog */}
+      <Dialog open={invoiceOpen} onOpenChange={(open) => { if (!open) { setInvoiceOpen(false); setInvoiceData(null); } }}>
+        <DialogContent className="max-w-sm p-0 overflow-hidden">
+          {invoiceLoading ? (
+            <div className="p-8 flex items-center justify-center">
+              <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : invoiceData ? (
+            <div id="utang-invoice" className="bg-white text-black">
+              {/* Invoice Header */}
+              <div className="bg-primary text-primary-foreground p-4 text-center">
+                <h3 className="text-lg font-bold">{invoiceData.storeInfo.storeName || 'Sari-Sari Store'}</h3>
+                {invoiceData.storeInfo.storeAddress && <p className="text-xs opacity-90">{invoiceData.storeInfo.storeAddress}</p>}
+                {invoiceData.storeInfo.storeContact && <p className="text-xs opacity-90">{invoiceData.storeInfo.storeContact}</p>}
+              </div>
+
+              <div className="p-4 space-y-3">
+                {/* Title */}
+                <div className="text-center">
+                  <h4 className="text-base font-bold uppercase tracking-wide">Utang Invoice</h4>
+                  <p className="text-xs text-gray-500">Credit Statement of Account</p>
+                </div>
+
+                <Separator />
+
+                {/* Customer & Date Info */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <p className="text-gray-500">Customer</p>
+                    <p className="font-semibold text-sm">{invoiceData.sale.customerName || 'Walk-in'}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-gray-500">Date</p>
+                    <p className="font-medium">{formatDate(invoiceData.sale.date)}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Invoice #</p>
+                    <p className="font-mono font-medium text-xs">{invoiceData.sale.transactionNumber}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-gray-500">Status</p>
+                    <Badge variant={invoiceData.sale.status === 'CREDIT' ? 'destructive' : 'secondary'} className="text-xs">
+                      {invoiceData.sale.status === 'CREDIT' ? 'PENDING' : 'PAID'}
+                    </Badge>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Items Table */}
+                <div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-gray-300">
+                        <th className="text-left py-1.5 font-semibold">Item</th>
+                        <th className="text-center py-1.5 font-semibold w-10">Qty</th>
+                        <th className="text-right py-1.5 font-semibold w-16">Price</th>
+                        <th className="text-right py-1.5 font-semibold w-16">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoiceData.sale.items.map((item, i) => (
+                        <tr key={i} className="border-b border-gray-100">
+                          <td className="py-1.5">{item.productName}</td>
+                          <td className="text-center py-1.5">{item.quantity}</td>
+                          <td className="text-right py-1.5">{formatCurrency(item.unitPrice)}</td>
+                          <td className="text-right py-1.5 font-medium">{formatCurrency(item.totalPrice)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <Separator />
+
+                {/* Totals */}
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Subtotal</span>
+                    <span>{formatCurrency(invoiceData.sale.subtotal)}</span>
+                  </div>
+                  {invoiceData.sale.discount > 0 && (
+                    <div className="flex justify-between text-red-600">
+                      <span>Discount</span>
+                      <span>-{formatCurrency(invoiceData.sale.discount)}</span>
+                    </div>
+                  )}
+                  <Separator />
+                  <div className="flex justify-between text-base font-bold">
+                    <span>Total Amount Due</span>
+                    <span className={invoiceData.sale.status === 'CREDIT' ? 'text-red-600' : 'text-green-600'}>
+                      {formatCurrency(invoiceData.sale.total)}
+                    </span>
+                  </div>
+                </div>
+
+                {invoiceData.sale.status === 'CREDIT' && (
+                  <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
+                    <p className="text-xs font-bold text-red-600 uppercase tracking-wider">Status: Unpaid</p>
+                    <p className="text-xs text-red-500 mt-0.5">Please settle this amount at your earliest convenience.</p>
+                  </div>
+                )}
+
+                {invoiceData.sale.status === 'COMPLETED' && invoiceData.sale.utangPaidAt && (
+                  <div className="bg-green-50 border border-green-200 rounded p-2 text-center">
+                    <p className="text-xs font-bold text-green-600 uppercase tracking-wider">Paid in Full</p>
+                    <p className="text-xs text-green-500 mt-0.5">
+                      Paid by {invoiceData.sale.utangPaidByUser?.displayName || 'Unknown'} on {formatDate(invoiceData.sale.utangPaidAt)}
+                    </p>
+                  </div>
+                )}
+
+                <p className="text-center text-[10px] text-gray-400 pt-1">
+                  Cashier: {invoiceData.sale.cashier?.displayName || 'Unknown'}
+                </p>
+              </div>
+            </div>
+          ) : null}
+          <div className="border-t p-3 flex justify-end gap-2 bg-background">
+            <Button variant="outline" size="sm" onClick={() => { setInvoiceOpen(false); setInvoiceData(null); }}>
+              Close
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
