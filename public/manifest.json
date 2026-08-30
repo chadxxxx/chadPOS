@@ -4,6 +4,7 @@
   "description": "Point of Sale system for Sari-Sari Store businesses",
   "start_url": "/",
   "display": "standalone",
+  "scope": "/",
   "background_color": "#ffffff",
   "theme_color": "#171717",
   "orientation": "portrait-primary",

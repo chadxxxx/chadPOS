@@ -37,28 +37,31 @@ interface UtangSummary {
   uniquePendingCustomers: number;
 }
 
-interface InvoiceItem {
-  productName: string;
-  quantity: number;
-  unitPrice: number;
-  totalPrice: number;
+interface CustomerInvoiceTransaction {
+  id: string;
+  transactionNumber: string;
+  date: string;
+  subtotal: number;
+  discount: number;
+  total: number;
+  status: string;
+  items: {
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    date: string;
+  }[];
+  utangPaidAt: string | null;
+  utangPaidByUser: { id: string; displayName: string } | null;
 }
 
-interface InvoiceData {
-  sale: {
-    id: string;
-    transactionNumber: string;
-    date: string;
-    customerName: string | null;
-    total: number;
-    subtotal: number;
-    discount: number;
-    status: string;
-    items: InvoiceItem[];
-    utangPaidAt: string | null;
-    utangPaidByUser: { id: string; displayName: string } | null;
-    cashier: { displayName: string } | null;
-  };
+interface CustomerInvoiceData {
+  customerName: string;
+  transactions: CustomerInvoiceTransaction[];
+  grandTotal: number;
+  totalItems: number;
+  transactionCount: number;
   storeInfo: {
     storeName?: string;
     storeAddress?: string;
@@ -84,10 +87,11 @@ export function UtangView() {
   const [paying, setPaying] = useState(false);
   const limit = 20;
 
-  // Invoice state
+  // Customer invoice state
   const [invoiceOpen, setInvoiceOpen] = useState(false);
-  const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
+  const [invoiceData, setInvoiceData] = useState<CustomerInvoiceData | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
+  const [invoiceCustomer, setInvoiceCustomer] = useState('');
 
   const fetchUtang = useCallback(async () => {
     setLoading(true);
@@ -127,13 +131,15 @@ export function UtangView() {
     setConfirmOpen(true);
   };
 
-  const handleInvoiceClick = async (saleId: string) => {
+  const handleCustomerInvoice = async (customerName: string) => {
+    setInvoiceCustomer(customerName);
     setInvoiceLoading(true);
     setInvoiceOpen(true);
-    const res = await apiFetch(`/api/utang/${saleId}`);
+    setInvoiceData(null);
+    const res = await apiFetch(`/api/utang/customer-invoice?customerName=${encodeURIComponent(customerName)}&status=pending`);
     setInvoiceLoading(false);
     if (res.error) { toast.error(res.error); setInvoiceOpen(false); return; }
-    setInvoiceData(res.data as InvoiceData);
+    setInvoiceData(res.data as CustomerInvoiceData);
   };
 
   const handleConfirmPay = async () => {
@@ -275,7 +281,8 @@ export function UtangView() {
                           size="sm"
                           variant="ghost"
                           className="h-7 px-2 text-xs"
-                          onClick={() => handleInvoiceClick(sale.id)}
+                          onClick={() => sale.customerName && handleCustomerInvoice(sale.customerName)}
+                          disabled={!sale.customerName}
                         >
                           <FileText className="h-3.5 w-3.5 mr-1" />
                           Invoice
@@ -353,9 +360,10 @@ export function UtangView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Invoice Dialog */}
+
+      {/* Customer Invoice Dialog */}
       <Dialog open={invoiceOpen} onOpenChange={(open) => { if (!open) { setInvoiceOpen(false); setInvoiceData(null); } }}>
-        <DialogContent className="max-w-sm p-0 overflow-hidden">
+        <DialogContent className="max-w-md p-0 overflow-hidden max-h-[90vh] overflow-y-auto">
           {invoiceLoading ? (
             <div className="p-8 flex items-center justify-center">
               <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -363,7 +371,7 @@ export function UtangView() {
           ) : invoiceData ? (
             <div id="utang-invoice" className="bg-white text-black">
               {/* Invoice Header */}
-              <div className="bg-primary text-primary-foreground p-4 text-center">
+              <div className="bg-gray-900 text-white p-4 text-center">
                 <h3 className="text-lg font-bold">{invoiceData.storeInfo.storeName || 'Sari-Sari Store'}</h3>
                 {invoiceData.storeInfo.storeAddress && <p className="text-xs opacity-90">{invoiceData.storeInfo.storeAddress}</p>}
                 {invoiceData.storeInfo.storeContact && <p className="text-xs opacity-90">{invoiceData.storeInfo.storeContact}</p>}
@@ -373,105 +381,101 @@ export function UtangView() {
                 {/* Title */}
                 <div className="text-center">
                   <h4 className="text-base font-bold uppercase tracking-wide">Utang Invoice</h4>
-                  <p className="text-xs text-gray-500">Credit Statement of Account</p>
+                  <p className="text-xs text-gray-500">Statement of Account</p>
                 </div>
 
                 <Separator />
 
-                {/* Customer & Date Info */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                {/* Customer Info */}
+                <div className="space-y-1.5 text-xs">
                   <div>
-                    <p className="text-gray-500">Customer</p>
-                    <p className="font-semibold text-sm">{invoiceData.sale.customerName || 'Walk-in'}</p>
+                    <span className="text-gray-500">Customer Name: </span>
+                    <span className="font-bold text-sm">{invoiceData.customerName}</span>
                   </div>
-                  <div className="text-right">
-                    <p className="text-gray-500">Date</p>
-                    <p className="font-medium">{formatDate(invoiceData.sale.date)}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Invoice #</p>
-                    <p className="font-mono font-medium text-xs">{invoiceData.sale.transactionNumber}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-gray-500">Status</p>
-                    <Badge variant={invoiceData.sale.status === 'CREDIT' ? 'destructive' : 'secondary'} className="text-xs">
-                      {invoiceData.sale.status === 'CREDIT' ? 'PENDING' : 'PAID'}
-                    </Badge>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Items Table */}
-                <div>
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-300">
-                        <th className="text-left py-1.5 font-semibold">Item</th>
-                        <th className="text-center py-1.5 font-semibold w-10">Qty</th>
-                        <th className="text-right py-1.5 font-semibold w-16">Price</th>
-                        <th className="text-right py-1.5 font-semibold w-16">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invoiceData.sale.items.map((item, i) => (
-                        <tr key={i} className="border-b border-gray-100">
-                          <td className="py-1.5">{item.productName}</td>
-                          <td className="text-center py-1.5">{item.quantity}</td>
-                          <td className="text-right py-1.5">{formatCurrency(item.unitPrice)}</td>
-                          <td className="text-right py-1.5 font-medium">{formatCurrency(item.totalPrice)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <Separator />
-
-                {/* Totals */}
-                <div className="space-y-1 text-xs">
                   <div className="flex justify-between">
-                    <span className="text-gray-500">Subtotal</span>
-                    <span>{formatCurrency(invoiceData.sale.subtotal)}</span>
+                    <span className="text-gray-500">Total Transactions: </span>
+                    <span className="font-medium">{invoiceData.transactionCount}</span>
                   </div>
-                  {invoiceData.sale.discount > 0 && (
-                    <div className="flex justify-between text-red-600">
-                      <span>Discount</span>
-                      <span>-{formatCurrency(invoiceData.sale.discount)}</span>
-                    </div>
-                  )}
-                  <Separator />
-                  <div className="flex justify-between text-base font-bold">
-                    <span>Total Amount Due</span>
-                    <span className={invoiceData.sale.status === 'CREDIT' ? 'text-red-600' : 'text-green-600'}>
-                      {formatCurrency(invoiceData.sale.total)}
-                    </span>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Total Items: </span>
+                    <span className="font-medium">{invoiceData.totalItems}</span>
                   </div>
                 </div>
 
-                {invoiceData.sale.status === 'CREDIT' && (
-                  <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
-                    <p className="text-xs font-bold text-red-600 uppercase tracking-wider">Status: Unpaid</p>
-                    <p className="text-xs text-red-500 mt-0.5">Please settle this amount at your earliest convenience.</p>
-                  </div>
-                )}
+                <Separator />
 
-                {invoiceData.sale.status === 'COMPLETED' && invoiceData.sale.utangPaidAt && (
-                  <div className="bg-green-50 border border-green-200 rounded p-2 text-center">
-                    <p className="text-xs font-bold text-green-600 uppercase tracking-wider">Paid in Full</p>
-                    <p className="text-xs text-green-500 mt-0.5">
-                      Paid by {invoiceData.sale.utangPaidByUser?.displayName || 'Unknown'} on {formatDate(invoiceData.sale.utangPaidAt)}
-                    </p>
-                  </div>
-                )}
+                {/* Transactions with Items */}
+                <div className="space-y-3">
+                  {invoiceData.transactions.map((txn, txnIdx) => (
+                    <div key={txn.id} className="border border-gray-200 rounded overflow-hidden">
+                      {/* Transaction header */}
+                      <div className="bg-gray-50 px-2.5 py-1.5 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[10px] font-medium text-gray-600">#{txnIdx + 1}</span>
+                          <span className="font-mono text-[10px] text-gray-500">{txn.transactionNumber}</span>
+                        </div>
+                        <span className="text-[10px] text-gray-500">{formatDate(txn.date)}</span>
+                      </div>
 
-                <p className="text-center text-[10px] text-gray-400 pt-1">
-                  Cashier: {invoiceData.sale.cashier?.displayName || 'Unknown'}
+                      {/* Items */}
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-200">
+                            <th className="text-left px-2.5 py-1 font-semibold text-gray-600">Item</th>
+                            <th className="text-center px-1 py-1 font-semibold text-gray-600 w-9">Qty</th>
+                            <th className="text-right px-1 py-1 font-semibold text-gray-600 w-14">Price</th>
+                            <th className="text-right px-2.5 py-1 font-semibold text-gray-600 w-14">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {txn.items.map((item, i) => (
+                            <tr key={i} className="border-b border-gray-100">
+                              <td className="px-2.5 py-1">
+                                <div>{item.productName}</div>
+                                <div className="text-[9px] text-gray-400">{formatDate(item.date)}</div>
+                              </td>
+                              <td className="text-center px-1 py-1">{item.quantity}</td>
+                              <td className="text-right px-1 py-1">{formatCurrency(item.unitPrice)}</td>
+                              <td className="text-right px-2.5 py-1 font-medium">{formatCurrency(item.totalPrice)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      {/* Transaction subtotal */}
+                      <div className="px-2.5 py-1.5 bg-gray-50 flex justify-between text-xs font-medium">
+                        <span className="text-gray-500">Transaction Total</span>
+                        <span className={txn.status === 'CREDIT' ? 'text-red-600' : 'text-green-600'}>
+                          {formatCurrency(txn.total)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <Separator />
+
+                {/* Grand Total */}
+                <div className="bg-red-50 border border-red-200 rounded p-3 space-y-1">
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>Grand Total ({invoiceData.transactionCount} transaction{invoiceData.transactionCount > 1 ? 's' : ''})</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-bold">Total Amount Due</span>
+                    <span className="text-lg font-bold text-red-600">{formatCurrency(invoiceData.grandTotal)}</span>
+                  </div>
+                  <p className="text-[10px] text-red-500 text-center pt-0.5">
+                    Please settle this amount at your earliest convenience.
+                  </p>
+                </div>
+
+                <p className="text-center text-[9px] text-gray-400">
+                  Generated on {formatDate(new Date().toISOString())}
                 </p>
               </div>
             </div>
           ) : null}
-          <div className="border-t p-3 flex justify-end gap-2 bg-background">
+          <div className="border-t p-3 flex justify-end gap-2 bg-white">
             <Button variant="outline" size="sm" onClick={() => { setInvoiceOpen(false); setInvoiceData(null); }}>
               Close
             </Button>

@@ -44,3 +44,23 @@ Stage Summary:
 - Philippine Peso (₱) currency throughout
 - Mobile-responsive design with shadcn/ui
 - Camera barcode scanning via BarcodeDetector API with manual fallback
+
+---
+Task ID: 2
+Agent: Main
+Task: Per-customer utang invoice + iOS PWA fix
+
+Work Log:
+- Created /api/utang/customer-invoice API endpoint that returns all pending utang transactions for a given customer with items and dates
+- Replaced single-transaction invoice in utang-view.tsx with consolidated per-customer invoice showing customer name, all transactions grouped by date, each item with its date added, and grand total
+- Added explicit iOS PWA meta tags in layout.tsx (apple-mobile-web-app-capable, apple-mobile-web-app-status-bar-style, apple-mobile-web-app-title)
+- Added apple-touch-icon with sizes 180x180 and 192x192
+- Added scope: "/" to manifest.json
+- Updated service worker to v2 with proper CORS response caching
+- Verified all meta tags render correctly in HTML output
+
+Stage Summary:
+- Per-customer invoice dialog accessible from utang tab's Invoice button
+- Invoice shows: store name/address, customer name, each transaction with its date, each item with date added, transaction subtotals, and grand total
+- iOS PWA: all required meta tags present for Add to Home Screen support
+- Note: iOS does not support automatic install prompts - users must use Share > Add to Home Screen manually
