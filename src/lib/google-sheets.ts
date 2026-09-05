@@ -2,12 +2,13 @@
  * Google Sheets Backup Sync
  *
  * Appends sale/utang rows to a Google Sheet as a real-time backup.
- * Uses a Google Service Account for authentication (no user OAuth needed).
+ * Credentials are read from the StoreSetting table (set via Admin Settings UI),
+ * falling back to env vars for backwards compatibility.
  *
- * Required env vars:
- *   GOOGLE_SHEET_ID            — The spreadsheet ID from the URL
- *   GOOGLE_SERVICE_ACCOUNT_EMAIL — The service account email
- *   GOOGLE_PRIVATE_KEY         — The service account private key (PEM)
+ * Settings keys used:
+ *   googleSheetId              — The spreadsheet ID from the URL
+ *   googleServiceAccountEmail  — The service account email
+ *   googlePrivateKey           — The service account private key (PEM)
  *
  * The sheet should have these headers in row 1:
  *   Type | Txn # | Date | Customer | Items | Subtotal | Discount | Total |
@@ -15,29 +16,79 @@
  */
 
 import { google } from 'googleapis';
+import { db } from '@/lib/db';
 
 /* ------------------------------------------------------------------ */
-/*  Lazy auth — create one JWT client and reuse it                    */
+/*  Credential resolution — DB first, then env vars                    */
 /* ------------------------------------------------------------------ */
 
+interface SheetsCredentials {
+  sheetId: string;
+  email: string;
+  key: string;
+}
+
+/**
+ * Load Google Sheets credentials from DB settings,
+ * falling back to environment variables.
+ * Returns null if not fully configured.
+ */
+export async function getSheetsCredentials(): Promise<SheetsCredentials | null> {
+  try {
+    const settings = await db.storeSetting.findMany({
+      where: {
+        key: { in: ['googleSheetId', 'googleServiceAccountEmail', 'googlePrivateKey'] },
+      },
+    });
+    const map: Record<string, string> = {};
+    for (const s of settings) map[s.key] = s.value;
+
+    const sheetId = map.googleSheetId || process.env.GOOGLE_SHEET_ID || '';
+    const email = map.googleServiceAccountEmail || process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
+    const key = (map.googlePrivateKey || process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+    if (!sheetId || !email || !key) return null;
+
+    return { sheetId, email, key };
+  } catch {
+    // DB not available (startup edge case) — try env vars only
+    const sheetId = process.env.GOOGLE_SHEET_ID || '';
+    const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
+    const key = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+    if (!sheetId || !email || !key) return null;
+    return { sheetId, email, key };
+  }
+}
+
+/**
+ * Check if Google Sheets sync is configured (for status display).
+ * Does NOT test the actual connection — just checks if all 3 fields are set.
+ */
+export async function isGoogleSheetsConfigured(): Promise<boolean> {
+  const creds = await getSheetsCredentials();
+  return creds !== null;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Lazy auth — create one JWT client per credentials set              */
+/* ------------------------------------------------------------------ */
+
+let cachedAuthEmail = '';
 let authClient: any = null;
 
-function getAuthClient() {
-  if (authClient) return authClient;
+async function getAuthClient(): Promise<any> {
+  const creds = await getSheetsCredentials();
+  if (!creds) return null;
 
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-  if (!email || !key) {
-    console.warn('[GoogleSheets] Missing GOOGLE_SERVICE_ACCOUNT_EMAIL or GOOGLE_PRIVATE_KEY — sync disabled.');
-    return null;
-  }
+  // Reuse client if credentials haven't changed
+  if (authClient && cachedAuthEmail === creds.email) return authClient;
 
   authClient = new google.auth.JWT({
-    email,
-    key,
+    email: creds.email,
+    key: creds.key,
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
+  cachedAuthEmail = creds.email;
 
   return authClient;
 }
@@ -68,13 +119,10 @@ interface SyncSaleRow {
  * so the POS flow is never blocked by a Sheets sync failure.
  */
 export async function syncSaleToGoogleSheet(row: SyncSaleRow): Promise<void> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) {
-    // Sync not configured — silently skip
-    return;
-  }
+  const creds = await getSheetsCredentials();
+  if (!creds) return; // Not configured — silently skip
 
-  const auth = getAuthClient();
+  const auth = await getAuthClient();
   if (!auth) return;
 
   const values = [[
@@ -97,16 +145,76 @@ export async function syncSaleToGoogleSheet(row: SyncSaleRow): Promise<void> {
   try {
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range: 'Sheet1!A1',          // Appends after the last row in Sheet1
+      spreadsheetId: creds.sheetId,
+      range: 'Sheet1!A1',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: { values },
     });
     console.log(`[GoogleSheets] Synced ${row.type} txn ${row.transactionNumber}`);
   } catch (err: any) {
-    // Log but don't throw — Sheets backup failure must never break the sale
     console.error(`[GoogleSheets] Sync FAILED for ${row.type} txn ${row.transactionNumber}:`, err?.message || err);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Test connection — used by the admin UI "Test Connection" button    */
+/* ------------------------------------------------------------------ */
+
+export interface TestConnectionResult {
+  success: boolean;
+  message: string;
+  sheetTitle?: string;
+}
+
+/**
+ * Test the Google Sheets connection by:
+ * 1. Verifying all 3 credentials are set
+ * 2. Authenticating with the Sheets API
+ * 3. Reading the spreadsheet metadata (title)
+ */
+export async function testGoogleSheetsConnection(): Promise<TestConnectionResult> {
+  const creds = await getSheetsCredentials();
+  if (!creds) {
+    return {
+      success: false,
+      message: 'Not configured. Please fill in all 3 fields: Sheet ID, Service Account Email, and Private Key.',
+    };
+  }
+
+  try {
+    const auth = new google.auth.JWT({
+      email: creds.email,
+      key: creds.key,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const sheets = google.sheets({ version: 'v4', auth });
+    const response = await sheets.spreadsheets.get({
+      spreadsheetId: creds.sheetId,
+      fields: 'properties/title',
+    });
+
+    const title = response.data.properties?.title || 'Unknown';
+    return {
+      success: true,
+      message: `Connected successfully to "${title}"`,
+      sheetTitle: title,
+    };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+
+    if (/invalid_grant|invalid_client/.test(msg)) {
+      return { success: false, message: 'Authentication failed. Check your Service Account Email and Private Key.' };
+    }
+    if (/not found|404/.test(msg)) {
+      return { success: false, message: 'Spreadsheet not found. Check the Sheet ID and make sure you shared the sheet with the service account email.' };
+    }
+    if (/permission|403/.test(msg)) {
+      return { success: false, message: 'Permission denied. Share the Google Sheet with the service account email (Editor access).' };
+    }
+
+    return { success: false, message: `Connection failed: ${msg.slice(0, 200)}` };
   }
 }
 
