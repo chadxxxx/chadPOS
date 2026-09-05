@@ -168,7 +168,15 @@ export function SettingsView() {
     <div className='space-y-4'>
       <h2 className='text-lg font-semibold'>Settings</h2>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList><TabsTrigger value='general'>General</TabsTrigger><TabsTrigger value='payments'>Payment Methods</TabsTrigger><TabsTrigger value='integrations'>Integrations</TabsTrigger><TabsTrigger value='recovery'>Account Recovery</TabsTrigger><TabsTrigger value='data'>Data Export</TabsTrigger></TabsList>
+        <div className='overflow-x-auto -mx-1 px-1'>
+          <TabsList className='w-full grid grid-cols-5'>
+            <TabsTrigger value='general'>General</TabsTrigger>
+            <TabsTrigger value='payments'>Payments</TabsTrigger>
+            <TabsTrigger value='integrations'>Integrations</TabsTrigger>
+            <TabsTrigger value='recovery'>Recovery</TabsTrigger>
+            <TabsTrigger value='data'>Export</TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value='general' className='space-y-4 mt-3'>
           <div className='max-w-lg space-y-3'>
@@ -221,6 +229,9 @@ export function SettingsView() {
               <div className='flex items-center gap-2 mb-1'>
                 <Sheet className='h-5 w-5 text-green-600' />
                 <h3 className='font-medium'>Google Sheets Backup</h3>
+                <Badge variant={googleIsConfigured ? 'default' : 'outline'} className={googleIsConfigured ? 'bg-emerald-600 hover:bg-emerald-700' : ''}>
+                  {googleIsConfigured ? 'Connected' : 'Not Configured'}
+                </Badge>
               </div>
               <p className='text-sm text-muted-foreground'>Every sale and utang payment will be automatically added as a row in your Google Sheet as a real-time backup. If the sync fails, your POS still works normally.</p>
 
