@@ -6,23 +6,21 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plus, Trash2, RotateCcw, Download, AlertTriangle, Sheet, CheckCircle2, XCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Plus, RotateCcw, Download, AlertTriangle, Sheet, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export function SettingsView() {
-  const [tab, setTab] = useState('general');
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  // Form
+  // General form
   const [storeName, setStoreName] = useState('');
   const [storeAddress, setStoreAddress] = useState('');
   const [storeContact, setStoreContact] = useState('');
@@ -164,35 +162,14 @@ export function SettingsView() {
 
   if (loading) return <div className='space-y-2'><Skeleton className='h-10 w-full' /><Skeleton className='h-10 w-full' /></div>;
 
-  const settingsTabs = [
-    { value: 'general', label: 'General' },
-    { value: 'payments', label: 'Payments' },
-    { value: 'integrations', label: 'Integrations' },
-    { value: 'recovery', label: 'Recovery' },
-    { value: 'data', label: 'Export' },
-  ];
-
   return (
-    <div className='space-y-4'>
+    <div className='space-y-8'>
       <h2 className='text-lg font-semibold'>Settings</h2>
-      <Tabs value={tab} onValueChange={setTab}>
-        <div className='flex flex-wrap gap-1 p-1 bg-muted rounded-lg'>
-          {settingsTabs.map((t) => (
-            <button
-              key={t.value}
-              onClick={() => setTab(t.value)}
-              className={`flex-1 min-w-[80px] inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition-all ${
-                tab === t.value
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
 
-        <TabsContent value='general' className='space-y-4 mt-3'>
+      {/* ── General ── */}
+      <section>
+        <h3 className='text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3'>General</h3>
+        <Card><CardContent className='p-4 space-y-3'>
           <div className='max-w-lg space-y-3'>
             <div className='space-y-1'><Label>Store Name</Label><Input value={storeName} onChange={(e) => setStoreName(e.target.value)} /></div>
             <div className='space-y-1'><Label>Address</Label><Input value={storeAddress} onChange={(e) => setStoreAddress(e.target.value)} /></div>
@@ -200,119 +177,169 @@ export function SettingsView() {
             <div className='space-y-1'><Label>Receipt Footer</Label><Input value={receiptFooter} onChange={(e) => setReceiptFooter(e.target.value)} /></div>
             <Button onClick={handleSaveGeneral} disabled={submitting}>{submitting ? 'Saving...' : 'Save Changes'}</Button>
           </div>
-        </TabsContent>
+        </CardContent></Card>
+      </section>
 
-        <TabsContent value='payments' className='space-y-4 mt-3'>
+      {/* ── Payment Methods ── */}
+      <section>
+        <h3 className='text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3'>Payment Methods</h3>
+        <Card><CardContent className='p-4 space-y-3'>
           <div className='max-w-lg space-y-3'>
-            <div className='flex gap-2'><Input placeholder='New payment method name' value={newMethod} onChange={(e) => setNewMethod(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddPayment()} /><Button onClick={handleAddPayment}><Plus className='h-4 w-4 mr-1' /> Add</Button></div>
+            <div className='flex gap-2'>
+              <Input placeholder='New payment method name' value={newMethod} onChange={(e) => setNewMethod(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddPayment()} />
+              <Button onClick={handleAddPayment}><Plus className='h-4 w-4 mr-1' /> Add</Button>
+            </div>
             <div className='border rounded-md'>
               <Table>
                 <TableHeader><TableRow><TableHead>Method</TableHead><TableHead>Status</TableHead><TableHead>Toggle</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {paymentMethods.map((pm: any) => (
-                    <TableRow key={pm.id}><TableCell className='font-medium'>{pm.name}</TableCell><TableCell><Badge variant={pm.isActive ? 'secondary' : 'outline'}>{pm.isActive ? 'Active' : 'Inactive'}</Badge></TableCell><TableCell><Switch checked={pm.isActive} onCheckedChange={() => handleTogglePayment(pm)} /></TableCell></TableRow>
+                    <TableRow key={pm.id}>
+                      <TableCell className='font-medium'>{pm.name}</TableCell>
+                      <TableCell><Badge variant={pm.isActive ? 'secondary' : 'outline'}>{pm.isActive ? 'Active' : 'Inactive'}</Badge></TableCell>
+                      <TableCell><Switch checked={pm.isActive} onCheckedChange={() => handleTogglePayment(pm)} /></TableCell>
+                    </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
           </div>
-        </TabsContent>
+        </CardContent></Card>
+      </section>
 
-        <TabsContent value='integrations' className='space-y-4 mt-3'>
-          <div className='max-w-lg space-y-4'>
-            {/* Status banner */}
-            <div className={`flex items-center gap-2 p-3 rounded-md border ${googleIsConfigured ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
-              {googleIsConfigured
-                ? <><CheckCircle2 className='h-4 w-4 text-emerald-600 shrink-0' /><span className='text-sm text-emerald-700 dark:text-emerald-400'>Google Sheets sync is configured</span></>
-                : <><AlertTriangle className='h-4 w-4 text-amber-600 shrink-0' /><span className='text-sm text-amber-700 dark:text-amber-400'>Google Sheets sync is not configured — sales will not be backed up</span></>
-              }
+      {/* ── Integrations (Google Sheets) ── */}
+      <section>
+        <h3 className='text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3 flex items-center gap-2'>
+          <Sheet className='h-4 w-4' /> Integrations
+        </h3>
+
+        {/* Status banner */}
+        <div className={`flex items-center gap-2 p-3 rounded-md border mb-3 ${googleIsConfigured ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+          {googleIsConfigured
+            ? <><CheckCircle2 className='h-4 w-4 text-emerald-600 shrink-0' /><span className='text-sm text-emerald-700 dark:text-emerald-400'>Google Sheets sync is configured</span></>
+            : <><AlertTriangle className='h-4 w-4 text-amber-600 shrink-0' /><span className='text-sm text-amber-700 dark:text-amber-400'>Google Sheets sync is not configured — sales will not be backed up</span></>
+          }
+        </div>
+
+        {/* Test result banner */}
+        {googleTestResult && (
+          <div className={`flex items-start gap-2 p-3 rounded-md border mb-3 ${googleTestResult.success ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+            {googleTestResult.success
+              ? <CheckCircle2 className='h-4 w-4 text-emerald-600 shrink-0 mt-0.5' />
+              : <XCircle className='h-4 w-4 text-red-600 shrink-0 mt-0.5' />
+            }
+            <span className={`text-sm ${googleTestResult.success ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}`}>{googleTestResult.message}</span>
+          </div>
+        )}
+
+        <Card><CardContent className='p-4 space-y-4'>
+          <div className='flex items-center gap-2 mb-1'>
+            <Sheet className='h-5 w-5 text-green-600' />
+            <h4 className='font-medium'>Google Sheets Backup</h4>
+            <Badge variant={googleIsConfigured ? 'default' : 'outline'} className={googleIsConfigured ? 'bg-emerald-600 hover:bg-emerald-700' : ''}>
+              {googleIsConfigured ? 'Connected' : 'Not Configured'}
+            </Badge>
+          </div>
+          <p className='text-sm text-muted-foreground'>Every sale and utang payment will be automatically added as a row in your Google Sheet as a real-time backup. If the sync fails, your POS still works normally.</p>
+
+          <Separator />
+
+          <div className='space-y-1'>
+            <Label>Google Sheet ID</Label>
+            <Input placeholder='e.g. 1ABC123XYZ...' value={googleSheetId} onChange={(e) => setGoogleSheetId(e.target.value)} />
+            <p className='text-xs text-muted-foreground'>Found in your Google Sheet URL: docs.google.com/spreadsheets/d/<span className='font-mono'>THIS_PART</span>/edit</p>
+          </div>
+
+          <div className='space-y-1'>
+            <Label>Service Account Email</Label>
+            <Input placeholder='e.g. pos-sync@your-project.iam.gserviceaccount.com' value={googleEmail} onChange={(e) => setGoogleEmail(e.target.value)} />
+          </div>
+
+          <div className='space-y-1'>
+            <Label>Private Key</Label>
+            <div className='relative'>
+              <textarea
+                className='flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono text-xs'
+                placeholder={'-----BEGIN PRIVATE KEY-----\nMIIEvA...\n-----END PRIVATE KEY-----'}
+                value={googleKeyVisible ? googleKey : (googleKey ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '')}
+                onChange={(e) => setGoogleKey(e.target.value)}
+                onFocus={() => setGoogleKeyVisible(true)}
+                onBlur={() => setGoogleKeyVisible(false)}
+              />
             </div>
-
-            {/* Test result banner */}
-            {googleTestResult && (
-              <div className={`flex items-start gap-2 p-3 rounded-md border ${googleTestResult.success ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                {googleTestResult.success
-                  ? <CheckCircle2 className='h-4 w-4 text-emerald-600 shrink-0 mt-0.5' />
-                  : <XCircle className='h-4 w-4 text-red-600 shrink-0 mt-0.5' />
-                }
-                <span className={`text-sm ${googleTestResult.success ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}`}>{googleTestResult.message}</span>
-              </div>
-            )}
-
-            <Card><CardContent className='p-4 space-y-4'>
-              <div className='flex items-center gap-2 mb-1'>
-                <Sheet className='h-5 w-5 text-green-600' />
-                <h3 className='font-medium'>Google Sheets Backup</h3>
-                <Badge variant={googleIsConfigured ? 'default' : 'outline'} className={googleIsConfigured ? 'bg-emerald-600 hover:bg-emerald-700' : ''}>
-                  {googleIsConfigured ? 'Connected' : 'Not Configured'}
-                </Badge>
-              </div>
-              <p className='text-sm text-muted-foreground'>Every sale and utang payment will be automatically added as a row in your Google Sheet as a real-time backup. If the sync fails, your POS still works normally.</p>
-
-              <Separator />
-
-              <div className='space-y-1'>
-                <Label>Google Sheet ID</Label>
-                <Input placeholder='e.g. 1ABC123XYZ...' value={googleSheetId} onChange={(e) => setGoogleSheetId(e.target.value)} />
-                <p className='text-xs text-muted-foreground'>Found in your Google Sheet URL: docs.google.com/spreadsheets/d/<span className='font-mono'>THIS_PART</span>/edit</p>
-              </div>
-
-              <div className='space-y-1'>
-                <Label>Service Account Email</Label>
-                <Input placeholder='e.g. pos-sync@your-project.iam.gserviceaccount.com' value={googleEmail} onChange={(e) => setGoogleEmail(e.target.value)} />
-              </div>
-
-              <div className='space-y-1'>
-                <Label>Private Key</Label>
-                <div className='relative'>
-                  <textarea
-                    className='flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono text-xs'
-                    placeholder={'-----BEGIN PRIVATE KEY-----\nMIIEvA...\n-----END PRIVATE KEY-----'}
-                    value={googleKeyVisible ? googleKey : (googleKey ? '••••••••••••••••••••••••••••••••' : '')}
-                    onChange={(e) => setGoogleKey(e.target.value)}
-                    onFocus={() => setGoogleKeyVisible(true)}
-                    onBlur={() => setGoogleKeyVisible(false)}
-                  />
-                </div>
-                <p className='text-xs text-muted-foreground'>From the JSON key file. The full PEM block including BEGIN/END lines. Click to reveal.</p>
-              </div>
-
-              <div className='flex gap-2 pt-1'>
-                <Button onClick={handleSaveGoogleSheets} disabled={googleSaving}>
-                  {googleSaving ? 'Saving...' : 'Save Credentials'}
-                </Button>
-                <Button variant='outline' onClick={handleTestGoogleSheets} disabled={googleTesting || !googleIsConfigured}>
-                  {googleTesting ? <><Loader2 className='h-4 w-4 mr-1 animate-spin' /> Testing...</> : 'Test Connection'}
-                </Button>
-              </div>
-            </CardContent></Card>
-
-            <Card className='border-blue-500/30'><CardContent className='p-4 space-y-2'>
-              <h3 className='font-medium text-sm'>How to set up Google Sheets sync</h3>
-              <ol className='text-sm text-muted-foreground space-y-1 list-decimal list-inside'>
-                <li>Go to <a href='https://console.cloud.google.com' target='_blank' rel='noreferrer' className='text-blue-600 underline'>Google Cloud Console</a> and create a project</li>
-                <li>Enable the <b>Google Sheets API</b> in APIs &amp; Services → Library</li>
-                <li>Create a <b>Service Account</b> in Credentials → download the JSON key file</li>
-                <li><b>Share</b> your Google Sheet with the service account email (Editor access)</li>
-                <li>Copy the <b>Sheet ID</b> from your Google Sheet URL, the <b>client_email</b> and <b>private_key</b> from the JSON file, and paste them above</li>
-              </ol>
-            </CardContent></Card>
+            <p className='text-xs text-muted-foreground'>From the JSON key file. The full PEM block including BEGIN/END lines. Click to reveal.</p>
           </div>
-        </TabsContent>
-        <TabsContent value='recovery' className='space-y-4 mt-3'>
-          <div className='max-w-lg space-y-4'>
-            <Card><CardContent className='p-4 space-y-2'><h3 className='font-medium'>Recovery Email</h3><p className='text-sm text-muted-foreground'>{recoveryInfo?.hasRecoveryEmail ? `Configured: ${recoveryInfo.emailMasked}` : 'No recovery email configured.'}</p></CardContent></Card>
-            <Card className='border-yellow-500/40'><CardContent className='p-4 space-y-3'><div className='flex items-start gap-2'><AlertTriangle className='h-5 w-5 text-yellow-600 mt-0.5' /><div><h3 className='font-medium'>Recovery Codes</h3><p className='text-sm text-muted-foreground'>Generate one-time recovery codes to regain access if you forget your password. Store these codes securely - each code can only be used once.</p></div></div><Button onClick={handleGenerateCodes}><RotateCcw className='h-4 w-4 mr-1' /> Generate New Recovery Codes</Button></CardContent></Card>
-          </div>
-        </TabsContent>
 
-        <TabsContent value='data' className='space-y-4 mt-3'>
-          <div className='max-w-lg'><p className='text-sm text-muted-foreground mb-3'>Export your business data for record-keeping or backup. Files are in CSV format.</p><div className='grid grid-cols-2 gap-3'>{['sales', 'products', 'inventory', 'expenses'].map((type) => (<Button key={type} variant='outline' className='h-auto py-3' disabled={exporting === type} onClick={() => downloadExport(type)}><Download className='h-4 w-4 mr-2' />{exporting === type ? 'Exporting...' : type.charAt(0).toUpperCase() + type.slice(1)}</Button>))}</div></div>
-        </TabsContent>
-      </Tabs>
+          <div className='flex gap-2 pt-1'>
+            <Button onClick={handleSaveGoogleSheets} disabled={googleSaving}>
+              {googleSaving ? 'Saving...' : 'Save Credentials'}
+            </Button>
+            <Button variant='outline' onClick={handleTestGoogleSheets} disabled={googleTesting || !googleIsConfigured}>
+              {googleTesting ? <><Loader2 className='h-4 w-4 mr-1 animate-spin' /> Testing...</> : 'Test Connection'}
+            </Button>
+          </div>
+        </CardContent></Card>
+
+        <Card className='border-blue-500/30 mt-3'><CardContent className='p-4 space-y-2'>
+          <h4 className='font-medium text-sm'>How to set up Google Sheets sync</h4>
+          <ol className='text-sm text-muted-foreground space-y-1 list-decimal list-inside'>
+            <li>Go to <a href='https://console.cloud.google.com' target='_blank' rel='noreferrer' className='text-blue-600 underline'>Google Cloud Console</a> and create a project</li>
+            <li>Enable the <b>Google Sheets API</b> in APIs &amp; Services → Library</li>
+            <li>Create a <b>Service Account</b> in Credentials → download the JSON key file</li>
+            <li><b>Share</b> your Google Sheet with the service account email (Editor access)</li>
+            <li>Copy the <b>Sheet ID</b> from your Google Sheet URL, the <b>client_email</b> and <b>private_key</b> from the JSON file, and paste them above</li>
+          </ol>
+        </CardContent></Card>
+      </section>
+
+      {/* ── Account Recovery ── */}
+      <section>
+        <h3 className='text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3'>Account Recovery</h3>
+        <div className='max-w-lg space-y-3'>
+          <Card><CardContent className='p-4 space-y-2'>
+            <h4 className='font-medium'>Recovery Email</h4>
+            <p className='text-sm text-muted-foreground'>{recoveryInfo?.hasRecoveryEmail ? `Configured: ${recoveryInfo.emailMasked}` : 'No recovery email configured.'}</p>
+          </CardContent></Card>
+          <Card className='border-yellow-500/40'><CardContent className='p-4 space-y-3'>
+            <div className='flex items-start gap-2'>
+              <AlertTriangle className='h-5 w-5 text-yellow-600 mt-0.5' />
+              <div>
+                <h4 className='font-medium'>Recovery Codes</h4>
+                <p className='text-sm text-muted-foreground'>Generate one-time recovery codes to regain access if you forget your password. Store these codes securely - each code can only be used once.</p>
+              </div>
+            </div>
+            <Button onClick={handleGenerateCodes}><RotateCcw className='h-4 w-4 mr-1' /> Generate New Recovery Codes</Button>
+          </CardContent></Card>
+        </div>
+      </section>
+
+      {/* ── Data Export ── */}
+      <section>
+        <h3 className='text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3'>Data Export</h3>
+        <Card><CardContent className='p-4'>
+          <p className='text-sm text-muted-foreground mb-3'>Export your business data for record-keeping or backup. Files are in CSV format.</p>
+          <div className='grid grid-cols-2 gap-3 max-w-lg'>
+            {['sales', 'products', 'inventory', 'expenses'].map((type) => (
+              <Button key={type} variant='outline' className='h-auto py-3' disabled={exporting === type} onClick={() => downloadExport(type)}>
+                <Download className='h-4 w-4 mr-2' />{exporting === type ? 'Exporting...' : type.charAt(0).toUpperCase() + type.slice(1)}
+              </Button>
+            ))}
+          </div>
+        </CardContent></Card>
+      </section>
 
       <Dialog open={codesDialog} onOpenChange={setCodesDialog}>
-        <DialogContent><DialogHeader><DialogTitle>Recovery Codes</DialogTitle></DialogHeader><div className='space-y-3'><AlertTriangle className='h-5 w-5 text-yellow-600' /><p className='text-sm'>Save these codes in a secure location. Each code can only be used once. These codes will not be shown again.</p><div className='bg-muted p-3 rounded font-mono text-sm space-y-1'>{recoveryCodes.map((code) => <div key={code}>{code}</div>)}</div></div><DialogFooter><Button onClick={() => setCodesDialog(false)}>I Have Saved These Codes</Button></DialogFooter></DialogContent>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Recovery Codes</DialogTitle></DialogHeader>
+          <div className='space-y-3'>
+            <AlertTriangle className='h-5 w-5 text-yellow-600' />
+            <p className='text-sm'>Save these codes in a secure location. Each code can only be used once. These codes will not be shown again.</p>
+            <div className='bg-muted p-3 rounded font-mono text-sm space-y-1'>
+              {recoveryCodes.map((code) => <div key={code}>{code}</div>)}
+            </div>
+          </div>
+          <DialogFooter><Button onClick={() => setCodesDialog(false)}>I Have Saved These Codes</Button></DialogFooter>
+        </DialogContent>
       </Dialog>
     </div>
   );
