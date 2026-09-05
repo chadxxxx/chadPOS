@@ -1,8 +1,10 @@
 const API_BASE = '';
+const DEFAULT_TIMEOUT = 15000; // 15s default timeout for all API calls
 
 export async function apiFetch<T = unknown>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT
 ): Promise<{ data?: T; error?: string; status: number }> {
   try {
     const token = typeof window !== 'undefined' ? sessionStorage.getItem('session_token') : null;
@@ -14,11 +16,17 @@ export async function apiFetch<T = unknown>(
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    // AbortController timeout to prevent hanging requests
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers,
+      signal: controller.signal,
     });
 
+    clearTimeout(timer);
     const json = await res.json();
 
     if (!res.ok) {
@@ -26,7 +34,10 @@ export async function apiFetch<T = unknown>(
     }
 
     return { data: json.data, status: res.status };
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { error: 'Request timed out. Please check your connection and try again.', status: 0 };
+    }
     return { error: 'Network error. Please check your connection.', status: 0 };
   }
 }

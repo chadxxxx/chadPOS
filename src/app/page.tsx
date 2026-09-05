@@ -8,7 +8,7 @@ import { LoginPage } from '@/components/auth/login-page';
 import { AppShell } from '@/components/layout/app-shell';
 
 export default function Page() {
-  const { isAuthenticated, isLoading, init } = useAuthStore();
+  const { isAuthenticated, isLoading, isLoggingIn, init } = useAuthStore();
   const setView = useNavStore((s) => s.setView);
 
   // Single initialization: checks session + setup status
@@ -22,7 +22,8 @@ export default function Page() {
     }
   }, [isAuthenticated, setView]);
 
-  if (isLoading) {
+  // Only show full loading screen during initial app init, not during login
+  if (isLoading && !isLoggingIn) {
     return <LoadingScreen />;
   }
 

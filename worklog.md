@@ -84,3 +84,25 @@ Stage Summary:
 - Application is fully functional with zero errors
 - Scanner works correctly (camera mode + manual fallback)
 - All pages verified: Dashboard, POS, Products, Inventory, Sales, Reports, Expenses, Suppliers, Users, Utang, Settings, Audit
+
+---
+Task ID: 4
+Agent: Main
+Task: Fix "Loading..." stuck screen and harden app against network issues
+
+Work Log:
+- Root cause: login() was setting isLoading=true which caused page.tsx to show LoadingScreen instead of keeping LoginPage visible during login attempts
+- Added isLoggingIn state to auth-store (separate from isLoading) — login uses isLoggingIn, init uses isLoading
+- Updated page.tsx: only show LoadingScreen during init (isLoading && !isLoggingIn), not during login
+- Added fetchWithTimeout() utility with 10s timeout to auth-store init setup check
+- Added 15s default timeout to apiFetch() via AbortController — all API calls now abort if they take too long
+- Added 12s hard safety timeout in init() — force-unlocks UI if init never completes
+- Updated LoadingScreen to show "Taking longer than expected..." after 8s with a hint to refresh
+- Verified: stale session token correctly falls through to login page (not stuck on loading)
+- Verified: failed login attempts keep login page visible (not replaced by loading screen)
+- Verified: zero console errors on fresh load and after login failure
+
+Stage Summary:
+- App no longer gets stuck on "Loading..." screen — multiple safety nets added
+- Login page stays visible during login attempts (shows "Signing In..." on button)
+- All API calls have 15s timeout, init has 12s hard timeout, loading screen has 8s feedback
