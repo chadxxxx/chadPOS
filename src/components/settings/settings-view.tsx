@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -164,18 +164,32 @@ export function SettingsView() {
 
   if (loading) return <div className='space-y-2'><Skeleton className='h-10 w-full' /><Skeleton className='h-10 w-full' /></div>;
 
+  const settingsTabs = [
+    { value: 'general', label: 'General' },
+    { value: 'payments', label: 'Payments' },
+    { value: 'integrations', label: 'Integrations' },
+    { value: 'recovery', label: 'Recovery' },
+    { value: 'data', label: 'Export' },
+  ];
+
   return (
     <div className='space-y-4'>
       <h2 className='text-lg font-semibold'>Settings</h2>
       <Tabs value={tab} onValueChange={setTab}>
-        <div className='overflow-x-auto -mx-1 px-1'>
-          <TabsList className='w-full grid grid-cols-5'>
-            <TabsTrigger value='general'>General</TabsTrigger>
-            <TabsTrigger value='payments'>Payments</TabsTrigger>
-            <TabsTrigger value='integrations'>Integrations</TabsTrigger>
-            <TabsTrigger value='recovery'>Recovery</TabsTrigger>
-            <TabsTrigger value='data'>Export</TabsTrigger>
-          </TabsList>
+        <div className='flex flex-wrap gap-1 p-1 bg-muted rounded-lg'>
+          {settingsTabs.map((t) => (
+            <button
+              key={t.value}
+              onClick={() => setTab(t.value)}
+              className={`flex-1 min-w-[80px] inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition-all ${
+                tab === t.value
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
         <TabsContent value='general' className='space-y-4 mt-3'>
