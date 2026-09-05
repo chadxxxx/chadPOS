@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pos-cache-v3';
+const CACHE_NAME = 'pos-cache-v4';
 const STATIC_ASSETS = ['/', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
