@@ -230,17 +230,18 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         addError('Camera stream acquired: ' + stream.getVideoTracks().length + ' track(s)');
         setPermissionStatus('granted');
 
-        // Step 5: Attach stream to video element (don't play it ourselves
-        // — the ZXing library handles play() via playVideoOnLoadAsync,
-        // and calling play() before the library sets up its 'playing' listener
-        // would cause the promise to hang forever)
+        // Step 5: Get video element (don't set srcObject ourselves —
+        // decodeFromStream handles attaching the stream to the video and
+        // calling play() internally. Setting srcObject before calling
+        // decodeFromVideoElementContinuously was a bug: that method calls
+        // reset() → cleanVideoSource() → video.srcObject = null, which
+        // destroyed the camera stream before scanning could start.)
         const video = videoRef.current;
         if (!video) {
           throw new Error('Video element not found in DOM');
         }
-        video.srcObject = stream;
 
-        addError('Stream attached, starting scanner...');
+        addError('Starting scanner with stream...');
 
         // Step 6: Re-enumerate to get labels now that we have permission
         const updatedCams = await enumerateCameras();
@@ -249,8 +250,10 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         setSelectedCameraId(activeDeviceId || targetDeviceId);
 
         // Step 7: Start continuous scanning via ZXing
+        // Use decodeFromStream which properly attaches the stream to the
+        // video element after its internal reset, then plays and scans.
         addError('Starting ZXing continuous scan...');
-        await reader.decodeFromVideoElementContinuously(video, (result: any, error: any) => {
+        await reader.decodeFromStream(stream, video, (result: any, error: any) => {
           // error is NotFoundException when no barcode found in frame (normal)
           // result is a Result object when a barcode IS found
           if (error) return;

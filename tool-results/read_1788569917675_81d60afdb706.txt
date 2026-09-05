@@ -1,0 +1,779 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useRef, useCallback } from 'react';
+     4→import { useCartStore } from '@/store/cart-store';
+     5→import { useAuthStore } from '@/store/auth-store';
+     6→import { apiFetch, formatCurrency } from '@/lib/api';
+     7→import { Button } from '@/components/ui/button';
+     8→import { Input } from '@/components/ui/input';
+     9→import { Label } from '@/components/ui/label';
+    10→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+    11→import { ScrollArea } from '@/components/ui/scroll-area';
+    12→import { Separator } from '@/components/ui/separator';
+    13→import { Skeleton } from '@/components/ui/skeleton';
+    14→import {
+    15→  Select,
+    16→  SelectContent,
+    17→  SelectItem,
+    18→  SelectTrigger,
+    19→  SelectValue,
+    20→} from '@/components/ui/select';
+    21→import {
+    22→  Dialog,
+    23→  DialogContent,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→  DialogDescription,
+    27→  DialogFooter,
+    28→} from '@/components/ui/dialog';
+    29→import { toast } from 'sonner';
+    30→import { Search, ScanBarcode, Minus, Plus, Trash2, PackagePlus, AlertTriangle } from 'lucide-react';
+    31→import { ReceiptDialog } from './receipt-dialog';
+    32→import { BarcodeScanner } from './barcode-scanner';
+    33→
+    34→interface Product {
+    35→  id: string;
+    36→  name: string;
+    37→  barcode: string | null;
+    38→  sellingPrice: number;
+    39→  costPrice: number;
+    40→  currentQuantity: number;
+    41→  unit: string;
+    42→  status: string;
+    43→  sku?: string | null;
+    44→}
+    45→
+    46→interface PaymentMethod {
+    47→  id: string;
+    48→  name: string;
+    49→  isActive: boolean;
+    50→}
+    51→
+    52→interface CompletedSale {
+    53→  transactionNumber: string;
+    54→  date: string;
+    55→  subtotal: number;
+    56→  discount: number;
+    57→  total: number;
+    58→  paymentMethod: string;
+    59→  paymentAmount: number;
+    60→  changeAmount: number;
+    61→  customerName: string | null;
+    62→  status: string;
+    63→  cashier: { displayName: string } | null;
+    64→  items: {
+    65→    productName: string;
+    66→    quantity: number;
+    67→    unitPrice: number;
+    68→    totalPrice: number;
+    69→  }[];
+    70→}
+    71→
+    72→/* ------------------------------------------------------------------ */
+    73→
+    74→export function PosView() {
+    75→  const {
+    76→    items,
+    77→    discount,
+    78→    paymentMethod,
+    79→    addItem,
+    80→    removeItem,
+    81→    updateQuantity,
+    82→    setDiscount,
+    83→    setPaymentMethod,
+    84→    clearCart,
+    85→    getSubtotal,
+    86→    getTotal,
+    87→  } = useCartStore();
+    88→
+    89→  const user = useAuthStore((s) => s.user);
+    90→  const role = user?.role || '';
+    91→  const canDiscount = role === 'OWNER' || role === 'ADMIN';
+    92→
+    93→  const [searchQuery, setSearchQuery] = useState('');
+    94→  const [searchResults, setSearchResults] = useState<Product[]>([]);
+    95→  const [showResults, setShowResults] = useState(false);
+    96→  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+    97→  const [paymentAmount, setPaymentAmount] = useState('');
+    98→  const [customerName, setCustomerName] = useState('');
+    99→  const [checkingOut, setCheckingOut] = useState(false);
+   100→  const [showReceipt, setShowReceipt] = useState(false);
+   101→  const [completedSale, setCompletedSale] = useState<CompletedSale | null>(null);
+   102→  const [showScanner, setShowScanner] = useState(false);
+   103→  const [searching, setSearching] = useState(false);
+   104→  const [browsing, setBrowsing] = useState(false);
+   105→  const [storeName, setStoreName] = useState('My Sari-Sari Store');
+   106→  const [scannerBusy, setScannerBusy] = useState(false);
+   107→
+   108→  // "Product not found" dialog state
+   109→  const [notFoundBarcode, setNotFoundBarcode] = useState('');
+   110→  const [showNotFoundDialog, setShowNotFoundDialog] = useState(false);
+   111→
+   112→  // Quick-add product dialog state
+   113→  const [showQuickAdd, setShowQuickAdd] = useState(false);
+   114→  const [quickAddBarcode, setQuickAddBarcode] = useState('');
+   115→  const [quickAddForm, setQuickAddForm] = useState({
+   116→    name: '',
+   117→    costPrice: '',
+   118→    sellingPrice: '',
+   119→    unit: 'pc',
+   120→  });
+   121→  const [quickAddSaving, setQuickAddSaving] = useState(false);
+   122→
+   123→  const searchRef = useRef<HTMLDivElement>(null);
+   124→  const searchInputRef = useRef<HTMLInputElement>(null);
+   125→  const scannerBufferRef = useRef<string>('');
+   126→  const scannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   127→
+   128→  // Fetch payment methods & store name
+   129→  useEffect(() => {
+   130→    apiFetch('/api/settings?section=paymentMethods').then((res) => {
+   131→      if (res.data) {
+   132→        const methods = (res.data as any[]).filter((m: any) => m.isActive);
+   133→        setPaymentMethods(methods);
+   134→        if (methods.length === 0) {
+   135→          setPaymentMethods([
+   136→            { id: 'default-cash', name: 'Cash', isActive: true },
+   137→            { id: 'default-gcash', name: 'GCash', isActive: true },
+   138→            { id: 'default-utang', name: 'Utang', isActive: true },
+   139→          ]);
+   140→        }
+   141→      }
+   142→    });
+   143→    apiFetch<Record<string, string>>('/api/settings').then((res) => {
+   144→      if (res.data?.storeName) setStoreName(res.data.storeName);
+   145→    });
+   146→  }, []);
+   147→
+   148→  // Physical barcode scanner (keyboard wedge) support
+   149→  useEffect(() => {
+   150→    const handleKeyDown = (e: KeyboardEvent) => {
+   151→      const tag = (e.target as HTMLElement).tagName;
+   152→      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+   153→
+   154→      if (e.key === 'Enter' && scannerBufferRef.current.length >= 3) {
+   155→        e.preventDefault();
+   156→        const barcode = scannerBufferRef.current;
+   157→        scannerBufferRef.current = '';
+   158→        if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+   159→        handleBarcodeLookup(barcode);
+   160→        return;
+   161→      }
+   162→
+   163→      if (e.key.length === 1) {
+   164→        scannerBufferRef.current += e.key;
+   165→        if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+   166→        scannerTimeoutRef.current = setTimeout(() => {
+   167→          scannerBufferRef.current = '';
+   168→        }, 100);
+   169→      }
+   170→    };
+   171→
+   172→    window.addEventListener('keydown', handleKeyDown);
+   173→    return () => {
+   174→      window.removeEventListener('keydown', handleKeyDown);
+   175→      if (scannerTimeoutRef.current) clearTimeout(scannerTimeoutRef.current);
+   176→    };
+   177→  }, []);
+   178→
+   179→  // Close dropdown on outside click
+   180→  useEffect(() => {
+   181→    const handler = (e: MouseEvent) => {
+   182→      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+   183→        setShowResults(false);
+   184→      }
+   185→    };
+   186→    document.addEventListener('mousedown', handler);
+   187→    return () => document.removeEventListener('mousedown', handler);
+   188→  }, []);
+   189→
+   190→  const searchProducts = useCallback(async (query: string) => {
+   191→    if (!query.trim()) {
+   192→      setSearchResults([]);
+   193→      setShowResults(false);
+   194→      return;
+   195→    }
+   196→    setSearching(true);
+   197→    try {
+   198→      const res = await apiFetch('/api/products?search=' + encodeURIComponent(query) + '&status=ACTIVE&limit=20');
+   199→      if (res.data) {
+   200→        const d = res.data as any;
+   201→        const products: Product[] = d.data || d;
+   202→        setSearchResults(products);
+   203→        setShowResults(true);
+   204→      }
+   205→    } catch {
+   206→      // silent
+   207→    } finally {
+   208→      setSearching(false);
+   209→    }
+   210→  }, []);
+   211→
+   212→  const browseProducts = useCallback(async () => {
+   213→    setBrowsing(true);
+   214→    setSearching(true);
+   215→    try {
+   216→      const res = await apiFetch('/api/products?status=ACTIVE&limit=50');
+   217→      if (res.data) {
+   218→        const d = res.data as any;
+   219→        const products: Product[] = d.data || d;
+   220→        setSearchResults(products);
+   221→        setShowResults(true);
+   222→      }
+   223→    } catch {
+   224→      // silent
+   225→    } finally {
+   226→      setSearching(false);
+   227→      setBrowsing(false);
+   228→    }
+   229→  }, []);
+   230→
+   231→  let searchTimeout: ReturnType<typeof setTimeout>;
+   232→  const handleSearchChange = (value: string) => {
+   233→    setSearchQuery(value);
+   234→    clearTimeout(searchTimeout);
+   235→    if (value.trim().length >= 1) {
+   236→      searchTimeout = setTimeout(() => searchProducts(value), 200);
+   237→    } else {
+   238→      setSearchResults([]);
+   239→      setShowResults(false);
+   240→    }
+   241→  };
+   242→
+   243→  const handleAddToCart = (product: Product) => {
+   244→    if (product.currentQuantity <= 0) {
+   245→      toast.error('Product is out of stock: ' + product.name);
+   246→      return;
+   247→    }
+   248→    addItem({
+   249→      productId: product.id,
+   250→      name: product.name,
+   251→      barcode: product.barcode,
+   252→      price: product.sellingPrice,
+   253→      costPrice: product.costPrice,
+   254→      maxQty: product.currentQuantity,
+   255→    });
+   256→    setShowResults(false);
+   257→    setSearchQuery('');
+   258→    searchInputRef.current?.focus();
+   259→  };
+   260→
+   261→  /* ---- Barcode lookup (from scanner or physical wedge) ---- */
+   262→  const handleBarcodeLookup = async (barcode: string) => {
+   263→    if (scannerBusy) return;
+   264→    setScannerBusy(true);
+   265→    // Close the scanner dialog so the user can see results
+   266→    setShowScanner(false);
+   267→    try {
+   268→      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
+   269→      if (res.data && (res.data as any).found) {
+   270→        const product = (res.data as any).product as Product;
+   271→        if (product.currentQuantity <= 0) {
+   272→          toast.error('Product is out of stock: ' + product.name);
+   273→        } else {
+   274→          addItem({
+   275→            productId: product.id,
+   276→            name: product.name,
+   277→            barcode: product.barcode,
+   278→            price: product.sellingPrice,
+   279→            costPrice: product.costPrice,
+   280→            maxQty: product.currentQuantity,
+   281→          });
+   282→          toast.success('Added: ' + product.name);
+   283→        }
+   284→      } else {
+   285→        // Product not found — show dialog with option to create
+   286→        setNotFoundBarcode(barcode.trim());
+   287→        setShowNotFoundDialog(true);
+   288→      }
+   289→    } catch {
+   290→      toast.error('Barcode lookup failed.');
+   291→    } finally {
+   292→      setTimeout(() => setScannerBusy(false), 1000);
+   293→    }
+   294→  };
+   295→
+   296→  /* ---- Barcode lookup without busy guard (for internal use after creation) ---- */
+   297→  const handleBarcodeLookupDirect = async (barcode: string) => {
+   298→    try {
+   299→      const res = await apiFetch('/api/barcode/lookup?barcode=' + encodeURIComponent(barcode.trim()));
+   300→      if (res.data && (res.data as any).found) {
+   301→        const product = (res.data as any).product as Product;
+   302→        addItem({
+   303→          productId: product.id,
+   304→          name: product.name,
+   305→          barcode: product.barcode,
+   306→          price: product.sellingPrice,
+   307→          costPrice: product.costPrice,
+   308→          maxQty: Math.max(product.currentQuantity, 1),
+   309→        });
+   310→        toast.success('Created & added: ' + product.name);
+   311→      } else {
+   312→        toast.error('Product was created but could not be found for cart. Try scanning again.');
+   313→      }
+   314→    } catch {
+   315→      toast.error('Lookup after creation failed.');
+   316→    }
+   317→  };
+   318→
+   319→  /* ---- Quick-add product from not-found dialog ---- */
+   320→  const openQuickAdd = () => {
+   321→    setQuickAddBarcode(notFoundBarcode);
+   322→    setQuickAddForm({ name: '', costPrice: '', sellingPrice: '', unit: 'pc' });
+   323→    setShowNotFoundDialog(false);
+   324→    setShowQuickAdd(true);
+   325→  };
+   326→
+   327→  const handleQuickAddSave = async () => {
+   328→    if (!quickAddForm.name.trim()) { toast.error('Product name is required.'); return; }
+   329→    if (!quickAddForm.costPrice || isNaN(parseFloat(quickAddForm.costPrice))) { toast.error('Valid cost price is required.'); return; }
+   330→    if (!quickAddForm.sellingPrice || isNaN(parseFloat(quickAddForm.sellingPrice))) { toast.error('Valid selling price is required.'); return; }
+   331→
+   332→    setQuickAddSaving(true);
+   333→    try {
+   334→      const res = await apiFetch('/api/products', {
+   335→        method: 'POST',
+   336→        body: JSON.stringify({
+   337→          name: quickAddForm.name.trim(),
+   338→          barcode: quickAddBarcode || null,
+   339→          sku: quickAddBarcode || null,
+   340→          costPrice: parseFloat(quickAddForm.costPrice),
+   341→          sellingPrice: parseFloat(quickAddForm.sellingPrice),
+   342→          currentQuantity: 1,
+   343→          unit: quickAddForm.unit,
+   344→        }),
+   345→      });
+   346→      if (res.error) { toast.error(res.error); return; }
+   347→      setShowQuickAdd(false);
+   348→      // Directly add to cart (bypasses scannerBusy guard and stock=0 issue)
+   349→      if (quickAddBarcode) {
+   350→        setScannerBusy(false);
+   351→        await handleBarcodeLookupDirect(quickAddBarcode);
+   352→      }
+   353→    } catch {
+   354→      toast.error('Failed to create product.');
+   355→    } finally {
+   356→      setQuickAddSaving(false);
+   357→    }
+   358→  };
+   359→
+   360→  const subtotal = getSubtotal();
+   361→  const total = getTotal();
+   362→  const change = Math.max(0, parseFloat(paymentAmount || '0') - total);
+   363→  const isUtang = paymentMethod === 'UTANG';
+   364→  const isCash = paymentMethod === 'Cash';
+   365→
+   366→  const handleCheckout = async () => {
+   367→    if (items.length === 0) return;
+   368→    if (isUtang && !customerName.trim()) {
+   369→      toast.error('Customer name is required for Utang.');
+   370→      return;
+   371→    }
+   372→    if (!isUtang && parseFloat(paymentAmount || '0') < total) {
+   373→      toast.error('Insufficient payment amount.');
+   374→      return;
+   375→    }
+   376→
+   377→    setCheckingOut(true);
+   378→    try {
+   379→      const payAmount = isUtang ? 0 : parseFloat(paymentAmount);
+   380→      const res = await apiFetch<CompletedSale>('/api/pos/checkout', {
+   381→        method: 'POST',
+   382→        body: JSON.stringify({
+   383→          items: items.map((i) => ({
+   384→            productId: i.productId,
+   385→            name: i.name,
+   386→            barcode: i.barcode,
+   387→            price: i.price,
+   388→            costPrice: i.costPrice,
+   389→            quantity: i.quantity,
+   390→          })),
+   391→          discount,
+   392→          paymentMethod: isUtang ? 'UTANG' : paymentMethod,
+   393→          paymentAmount: payAmount,
+   394→          customerName: isUtang ? customerName.trim() : undefined,
+   395→        }),
+   396→      });
+   397→
+   398→      if (res.error) { toast.error(res.error); return; }
+   399→
+   400→      if (res.data) {
+   401→        setCompletedSale(res.data);
+   402→        setShowReceipt(true);
+   403→        clearCart();
+   404→        setPaymentAmount('');
+   405→        setCustomerName('');
+   406→      }
+   407→    } catch {
+   408→      toast.error('Checkout failed. Please try again.');
+   409→    } finally {
+   410→      setCheckingOut(false);
+   411→    }
+   412→  };
+   413→
+   414→  return (
+   415→    <div className="space-y-4">
+   416→      <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
+   417→        {/* Left: Search + Cart */}
+   418→        <div className="space-y-4">
+   419→          {/* Search bar with manual barcode input */}
+   420→          <div className="relative" ref={searchRef}>
+   421→            <div className="flex gap-2">
+   422→              <div className="relative flex-1">
+   423→                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   424→                <Input
+   425→                  ref={searchInputRef}
+   426→                  placeholder="Search products…"
+   427→                  value={searchQuery}
+   428→                  onChange={(e) => handleSearchChange(e.target.value)}
+   429→                  onFocus={() => { if (searchResults.length > 0) setShowResults(true); }}
+   430→                  className="pl-9 h-11"
+   431→                  autoFocus
+   432→                />
+   433→              </div>
+   434→              <Button
+   435→                variant="outline"
+   436→                className="h-11 px-3 shrink-0 text-xs"
+   437→                onClick={browseProducts}
+   438→                disabled={browsing}
+   439→                title="Browse all products"
+   440→              >
+   441→                {browsing ? '...' : 'Browse'}
+   442→              </Button>
+   443→              <Button
+   444→                variant="outline"
+   445→                size="icon"
+   446→                className="h-11 w-11 shrink-0"
+   447→                onClick={() => setShowScanner(true)}
+   448→                title="Camera Barcode Scanner"
+   449→              >
+   450→                <ScanBarcode className="h-4 w-4" />
+   451→              </Button>
+   452→            </div>
+   453→            {/* Manual barcode input below search */}
+   454→            <div className="mt-1.5">
+   455→              <div className="flex gap-2">
+   456→                <Input
+   457→                  placeholder="Type barcode number and press Enter…"
+   458→                  className="h-9 text-xs"
+   459→                  value={scannerBusy ? '' : undefined}
+   460→                  disabled={scannerBusy}
+   461→                  onKeyDown={(e) => {
+   462→                    if (e.key === 'Enter') {
+   463→                      const val = (e.target as HTMLInputElement).value.trim();
+   464→                      if (val.length >= 3) {
+   465→                        e.preventDefault();
+   466→                        (e.target as HTMLInputElement).value = '';
+   467→                        handleBarcodeLookup(val);
+   468→                      }
+   469→                    }
+   470→                  }}
+   471→                />
+   472→                <Button
+   473→                  variant="ghost"
+   474→                  size="sm"
+   475→                  className="h-9 px-2 text-xs text-muted-foreground shrink-0"
+   476→                  disabled={scannerBusy}
+   477→                  onClick={() => {
+   478→                    const input = searchRef.current?.querySelector('input[type=text]:not([placeholder*=Search])') as HTMLInputElement;
+   479→                    const val = input?.value?.trim();
+   480→                    if (val && val.length >= 3) {
+   481→                      input.value = '';
+   482→                      handleBarcodeLookup(val);
+   483→                    }
+   484→                  }}
+   485→                >
+   486→                  Look Up
+   487→                </Button>
+   488→              </div>
+   489→            </div>
+   490→
+   491→            {/* Search results dropdown */}
+   492→            {showResults && searchResults.length > 0 && (
+   493→              <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md max-h-64 overflow-y-auto scrollbar-thin">
+   494→                {searchResults.map((p) => (
+   495→                  <button
+   496→                    key={p.id}
+   497→                    onClick={() => handleAddToCart(p)}
+   498→                    className={`flex w-full items-center justify-between px-3 py-2.5 text-sm hover:bg-accent transition-colors min-h-[44px] ${p.currentQuantity <= 0 ? 'opacity-50' : ''}`}
+   499→                  >
+   500→                    <div className="text-left">
+   501→                      <p className="font-medium">{p.name}</p>
+   502→                      <p className="text-xs text-muted-foreground">{p.barcode || p.sku || '-'}</p>
+   503→                    </div>
+   504→                    <div className="text-right shrink-0 ml-3">
+   505→                      <p className="font-medium">{formatCurrency(p.sellingPrice)}</p>
+   506→                      <p className={`text-xs ${p.currentQuantity <= 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+   507→                        {p.currentQuantity <= 0 ? 'Out of Stock' : `Stock: ${p.currentQuantity}`}
+   508→                      </p>
+   509→                    </div>
+   510→                  </button>
+   511→                ))}
+   512→              </div>
+   513→            )}
+   514→            {showResults && searching && (
+   515→              <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md p-3">
+   516→                <Skeleton className="h-8 w-full" />
+   517→              </div>
+   518→            )}
+   519→          </div>
+   520→
+   521→          {/* Cart */}
+   522→          <Card>
+   523→            <CardHeader className="pb-2">
+   524→              <div className="flex items-center justify-between">
+   525→                <CardTitle className="text-sm font-medium">Cart ({items.length} item{items.length !== 1 ? 's' : ''})</CardTitle>
+   526→                {items.length > 0 && (
+   527→                  <Button variant="ghost" size="sm" className="text-xs text-destructive hover:text-destructive h-8" onClick={clearCart}>
+   528→                    Clear All
+   529→                  </Button>
+   530→                )}
+   531→              </div>
+   532→            </CardHeader>
+   533→            <CardContent className="p-0">
+   534→              {items.length === 0 ? (
+   535→                <div className="py-8 text-center text-sm text-muted-foreground">
+   536→                  Cart is empty. Search, browse, or scan products to add.<br />
+   537→                  <span className="text-xs">Physical barcode scanner also supported.</span>
+   538→                </div>
+   539→              ) : (
+   540→                <ScrollArea className="max-h-[40vh] lg:max-h-[50vh]">
+   541→                  <div className="px-4 pb-2 space-y-1">
+   542→                    {items.map((item) => (
+   543→                      <div key={item.productId} className="flex items-center gap-2 py-2 border-b border-border last:border-0">
+   544→                        <div className="flex-1 min-w-0">
+   545→                          <p className="text-sm font-medium truncate">{item.name}</p>
+   546→                          <p className="text-xs text-muted-foreground">{formatCurrency(item.price)} each</p>
+   547→                        </div>
+   548→                        <div className="flex items-center gap-1 shrink-0">
+   549→                          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.productId, item.quantity - 1)}>
+   550→                            <Minus className="h-3 w-3" />
+   551→                          </Button>
+   552→                          <span className="w-8 text-center text-sm font-medium">{item.quantity}</span>
+   553→                          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.productId, item.quantity + 1)} disabled={item.quantity >= item.maxQty}>
+   554→                            <Plus className="h-3 w-3" />
+   555→                          </Button>
+   556→                        </div>
+   557→                        <div className="text-right shrink-0 w-20">
+   558→                          <p className="text-sm font-medium">{formatCurrency(item.price * item.quantity)}</p>
+   559→                        </div>
+   560→                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeItem(item.productId)}>
+   561→                          <Trash2 className="h-3.5 w-3.5" />
+   562→                        </Button>
+   563→                      </div>
+   564→                    ))}
+   565→                  </div>
+   566→                </ScrollArea>
+   567→              )}
+   568→
+   569→              {items.length > 0 && (
+   570→                <div className="border-t border-border p-4 space-y-2">
+   571→                  <div className="flex justify-between text-sm">
+   572→                    <span className="text-muted-foreground">Subtotal</span>
+   573→                    <span>{formatCurrency(subtotal)}</span>
+   574→                  </div>
+   575→                  {canDiscount && (
+   576→                    <div className="flex items-center justify-between gap-2">
+   577→                      <Label htmlFor="pos-discount" className="text-sm text-muted-foreground shrink-0">Discount</Label>
+   578→                      <div className="relative w-28">
+   579→                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">₱</span>
+   580→                        <Input id="pos-discount" type="number" min="0" step="0.01" value={discount || ''} onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)} className="pl-7 h-8 text-sm" placeholder="0.00" />
+   581→                      </div>
+   582→                    </div>
+   583→                  )}
+   584→                  <Separator />
+   585→                  <div className="flex justify-between text-base font-semibold">
+   586→                    <span>Total</span>
+   587→                    <span>{formatCurrency(total)}</span>
+   588→                  </div>
+   589→                </div>
+   590→              )}
+   591→            </CardContent>
+   592→          </Card>
+   593→        </div>
+   594→
+   595→        {/* Right: Payment section */}
+   596→        <div className="space-y-4">
+   597→          <Card>
+   598→            <CardHeader className="pb-3">
+   599→              <CardTitle className="text-sm font-medium">Payment</CardTitle>
+   600→            </CardHeader>
+   601→            <CardContent className="space-y-4">
+   602→              <div className="space-y-1.5">
+   603→                <Label className="text-sm">Payment Method</Label>
+   604→                <Select value={isUtang ? 'UTANG' : paymentMethod} onValueChange={(v) => { setPaymentMethod(v); setPaymentAmount(''); }}>
+   605→                  <SelectTrigger className="h-11"><SelectValue /></SelectTrigger>
+   606→                  <SelectContent>
+   607→                    {paymentMethods.map((m) => (
+   608→                      <SelectItem key={m.id} value={m.name === 'Utang' ? 'UTANG' : m.name}>{m.name === 'Utang' ? '☕ Utang (Credit)' : m.name}</SelectItem>
+   609→                    ))}
+   610→                  </SelectContent>
+   611→                </Select>
+   612→              </div>
+   613→
+   614→              {isUtang && items.length > 0 && (
+   615→                <div className="space-y-1.5">
+   616→                  <Label htmlFor="customer-name" className="text-sm">Customer Name *</Label>
+   617→                  <Input
+   618→                    id="customer-name"
+   619→                    placeholder="Enter customer name"
+   620→                    value={customerName}
+   621→                    onChange={(e) => setCustomerName(e.target.value)}
+   622→                    className="h-11"
+   623→                  />
+   624→                  <p className="text-xs text-amber-600 dark:text-amber-400">
+   625→                    This sale will be recorded as credit (utang). The customer will pay later. Utang is NOT counted as gross sales.
+   626→                  </p>
+   627→                </div>
+   628→              )}
+   629→
+   630→              {isCash && items.length > 0 && (
+   631→                <div className="space-y-1.5">
+   632→                  <Label htmlFor="payment-amount" className="text-sm">Amount Tendered</Label>
+   633→                  <div className="relative">
+   634→                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">₱</span>
+   635→                    <Input id="payment-amount" type="number" min="0" step="0.01" value={paymentAmount} onChange={(e) => setPaymentAmount(e.target.value)} className="pl-7 h-11" placeholder="0.00" />
+   636→                  </div>
+   637→                  <div className="flex flex-wrap gap-2">
+   638→                    {[total, Math.ceil(total / 10) * 10, Math.ceil(total / 50) * 50, Math.ceil(total / 100) * 100, 500, 1000]
+   639→                      .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+   640→                      .slice(0, 4)
+   641→                      .map((amt) => (
+   642→                        <Button key={amt} variant="outline" size="sm" className="h-8 text-xs" onClick={() => setPaymentAmount(amt.toFixed(2))}>
+   643→                          {formatCurrency(amt)}
+   644→                        </Button>
+   645→                      ))}
+   646→                  </div>
+   647→                  {parseFloat(paymentAmount || '0') >= total && parseFloat(paymentAmount || '0') > 0 && (
+   648→                    <div className="flex justify-between text-sm bg-emerald-50 dark:bg-emerald-950/30 rounded-md p-2 -mx-1">
+   649→                      <span className="text-muted-foreground">Change</span>
+   650→                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">{formatCurrency(change)}</span>
+   651→                    </div>
+   652→                  )}
+   653→                </div>
+   654→              )}
+   655→
+   656→              {paymentMethod === 'GCash' && items.length > 0 && (
+   657→                <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 p-3 -mx-1">
+   658→                  <p className="text-sm text-muted-foreground">GCash Payment</p>
+   659→                  <p className="text-lg font-semibold">{formatCurrency(total)}</p>
+   660→                </div>
+   661→              )}
+   662→
+   663→              <Button
+   664→                className="w-full h-12 text-base font-semibold"
+   665→                disabled={items.length === 0 || checkingOut || (!isUtang && isCash && parseFloat(paymentAmount || '0') < total) || (isUtang && !customerName.trim())}
+   666→                onClick={handleCheckout}
+   667→              >
+   668→                {checkingOut ? 'Processing...' : isUtang ? `Record Utang - ${formatCurrency(total)}` : `Complete Sale - ${formatCurrency(total)}`}
+   669→              </Button>
+   670→            </CardContent>
+   671→          </Card>
+   672→        </div>
+   673→      </div>
+   674→
+   675→      {/* Receipt dialog */}
+   676→      <ReceiptDialog open={showReceipt} onOpenChange={setShowReceipt} sale={completedSale} storeName={storeName} />
+   677→
+   678→      {/* Camera barcode scanner */}
+   679→      {showScanner && (
+   680→        <BarcodeScanner
+   681→          mode="pos"
+   682→          onBarcodeDetected={handleBarcodeLookup}
+   683→          onClose={() => setShowScanner(false)}
+   684→        />
+   685→      )}
+   686→
+   687→      {/* Product Not Found dialog */}
+   688→      <Dialog open={showNotFoundDialog} onOpenChange={setShowNotFoundDialog}>
+   689→        <DialogContent className="max-w-sm">
+   690→          <DialogHeader>
+   691→            <DialogTitle className="flex items-center gap-2">
+   692→              <AlertTriangle className="h-5 w-5 text-amber-500" />
+   693→              Product Not Found
+   694→            </DialogTitle>
+   695→            <DialogDescription>
+   696→              No product matches barcode <strong className="font-mono">{notFoundBarcode}</strong>.
+   697→            </DialogDescription>
+   698→          </DialogHeader>
+   699→          <div className="space-y-3">
+   700→            <div className="rounded-md bg-muted p-3 text-center">
+   701→              <p className="font-mono text-lg font-semibold tracking-wider">{notFoundBarcode}</p>
+   702→            </div>
+   703→            <div className="flex gap-2">
+   704→              <Button variant="outline" className="flex-1" onClick={() => setShowNotFoundDialog(false)}>
+   705→                Dismiss
+   706→              </Button>
+   707→              <Button className="flex-1" onClick={openQuickAdd}>
+   708→                <PackagePlus className="h-4 w-4 mr-1.5" />
+   709→                Create Product
+   710→              </Button>
+   711→            </div>
+   712→          </div>
+   713→        </DialogContent>
+   714→      </Dialog>
+   715→
+   716→      {/* Quick-Add Product dialog */}
+   717→      <Dialog open={showQuickAdd} onOpenChange={setShowQuickAdd}>
+   718→        <DialogContent className="max-w-sm">
+   719→          <DialogHeader>
+   720→            <DialogTitle className="flex items-center gap-2">
+   721→              <PackagePlus className="h-5 w-5" />
+   722→              Register New Product
+   723→            </DialogTitle>
+   724→            <DialogDescription>
+   725→              Barcode <strong className="font-mono">{quickAddBarcode}</strong> will be assigned automatically.
+   726→            </DialogDescription>
+   727→          </DialogHeader>
+   728→          <div className="space-y-3">
+   729→            <div className="space-y-1.5">
+   730→              <Label htmlFor="qa-name">Product Name *</Label>
+   731→              <Input
+   732→                id="qa-name"
+   733→                placeholder="e.g. Lucky Me Pancit Canton"
+   734→                value={quickAddForm.name}
+   735→                onChange={(e) => setQuickAddForm((f) => ({ ...f, name: e.target.value }))}
+   736→                autoFocus
+   737→              />
+   738→            </div>
+   739→            <div className="grid grid-cols-2 gap-3">
+   740→              <div className="space-y-1.5">
+   741→                <Label htmlFor="qa-cost">Cost Price *</Label>
+   742→                <div className="relative">
+   743→                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₱</span>
+   744→                  <Input
+   745→                    id="qa-cost"
+   746→                    type="number" min="0" step="0.01" className="pl-6 h-10 text-sm"
+   747→                    placeholder="0.00"
+   748→                    value={quickAddForm.costPrice}
+   749→                    onChange={(e) => setQuickAddForm((f) => ({ ...f, costPrice: e.target.value }))}
+   750→                  />
+   751→                </div>
+   752→              </div>
+   753→              <div className="space-y-1.5">
+   754→                <Label htmlFor="qa-selling">Selling Price *</Label>
+   755→                <div className="relative">
+   756→                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₱</span>
+   757→                  <Input
+   758→                    id="qa-selling"
+   759→                    type="number" min="0" step="0.01" className="pl-6 h-10 text-sm"
+   760→                    placeholder="0.00"
+   761→                    value={quickAddForm.sellingPrice}
+   762→                    onChange={(e) => setQuickAddForm((f) => ({ ...f, sellingPrice: e.target.value }))}
+   763→                  />
+   764→                </div>
+   765→              </div>
+   766→            </div>
+   767→            <div className="flex gap-2 justify-end pt-1">
+   768→              <Button variant="outline" onClick={() => setShowQuickAdd(false)}>Cancel</Button>
+   769→              <Button onClick={handleQuickAddSave} disabled={quickAddSaving}>
+   770→                {quickAddSaving ? 'Creating…' : 'Create & Add to Cart'}
+   771→              </Button>
+   772→            </div>
+   773→          </div>
+   774→        </DialogContent>
+   775→      </Dialog>
+   776→    </div>
+   777→  );
+   778→}
+   779→

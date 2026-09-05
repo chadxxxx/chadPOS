@@ -1,0 +1,667 @@
+     1→'use client';
+     2→
+     3→import { useEffect, useRef, useState, useCallback } from 'react';
+     4→import {
+     5→  Dialog,
+     6→  DialogContent,
+     7→  DialogHeader,
+     8→  DialogTitle,
+     9→  DialogDescription,
+    10→} from '@/components/ui/dialog';
+    11→import { Button } from '@/components/ui/button';
+    12→import { Input } from '@/components/ui/input';
+    13→import { Label } from '@/components/ui/label';
+    14→import { Badge } from '@/components/ui/badge';
+    15→import { Separator } from '@/components/ui/separator';
+    16→import { toast } from 'sonner';
+    17→import {
+    18→  Camera,
+    19→  CameraOff,
+    20→  Keyboard,
+    21→  SwitchCamera,
+    22→  Flashlight,
+    23→  AlertTriangle,
+    24→  Bug,
+    25→} from 'lucide-react';
+    26→
+    27→/* ------------------------------------------------------------------ */
+    28→/*  Types                                                              */
+    29→/* ------------------------------------------------------------------ */
+    30→
+    31→interface BarcodeScannerProps {
+    32→  mode: 'pos' | 'product';
+    33→  onBarcodeDetected: (barcode: string) => void;
+    34→  onClose: () => void;
+    35→}
+    36→
+    37→interface Diagnostics {
+    38→  permissionStatus: string;
+    39→  selectedCamera: string;
+    40→  scannerState: string;
+    41→  lastBarcode: string;
+    42→  lastFormat: string;
+    43→  errors: string[];
+    44→  scanCount: number;
+    45→}
+    46→
+    47→/* ------------------------------------------------------------------ */
+    48→/*  Constants                                                          */
+    49→/* ------------------------------------------------------------------ */
+    50→
+    51→const COOLDOWN_MS = 1500;
+    52→
+    53→/* ------------------------------------------------------------------ */
+    54→/*  Beep utility (Web Audio API)                                       */
+    55→/* ------------------------------------------------------------------ */
+    56→
+    57→function playBeep() {
+    58→  try {
+    59→    const ctx = new AudioContext();
+    60→    const osc = ctx.createOscillator();
+    61→    const gain = ctx.createGain();
+    62→    osc.connect(gain);
+    63→    gain.connect(ctx.destination);
+    64→    osc.frequency.value = 1200;
+    65→    osc.type = 'sine';
+    66→    gain.gain.value = 0.3;
+    67→    osc.start();
+    68→    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    69→    osc.stop(ctx.currentTime + 0.15);
+    70→  } catch {
+    71→    /* audio not available */
+    72→  }
+    73→}
+    74→
+    75→function vibrate() {
+    76→  try {
+    77→    if (navigator.vibrate) navigator.vibrate(100);
+    78→  } catch {
+    79→    /* vibration not available */
+    80→  }
+    81→}
+    82→
+    83→/* ------------------------------------------------------------------ */
+    84→/*  Component                                                          */
+    85→/* ------------------------------------------------------------------ */
+    86→
+    87→export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScannerProps) {
+    88→  const videoRef = useRef<HTMLVideoElement>(null);
+    89→  const streamRef = useRef<MediaStream | null>(null);
+    90→  const readerRef = useRef<any>(null);
+    91→  const cooldownRef = useRef(false);
+    92→  const mountedRef = useRef(true);
+    93→
+    94→  // UI state
+    95→  const [scannerState, setScannerState] = useState<
+    96→    'idle' | 'starting' | 'scanning' | 'detected' | 'error'
+    97→  >('idle');
+    98→  const [errorMsg, setErrorMsg] = useState('');
+    99→  const [manualMode, setManualMode] = useState(false);
+   100→  const [manualBarcode, setManualBarcode] = useState('');
+   101→  const [manualSubmitting, setManualSubmitting] = useState(false);
+   102→  const [detectedBarcode, setDetectedBarcode] = useState('');
+   103→  const [detectedFormat, setDetectedFormat] = useState('');
+   104→  const [showDebug, setShowDebug] = useState(false);
+   105→  const [torchOn, setTorchOn] = useState(false);
+   106→  const [cameraList, setCameraList] = useState<{ id: string; label: string }[]>([]);
+   107→  const [selectedCameraId, setSelectedCameraId] = useState('');
+   108→  const [scanCount, setScanCount] = useState(0);
+   109→  const [diagErrors, setDiagErrors] = useState<string[]>([]);
+   110→  const [permissionStatus, setPermissionStatus] = useState('checking...');
+   111→
+   112→  // Keep latest callback in ref to avoid re-starting scanner on callback change
+   113→  const onBarcodeDetectedRef = useRef(onBarcodeDetected);
+   114→  useEffect(() => { onBarcodeDetectedRef.current = onBarcodeDetected; }, [onBarcodeDetected]);
+   115→  const onCloseRef = useRef(onClose);
+   116→  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+   117→
+   118→  /* ---- add a diagnostic error ---- */
+   119→  const addError = useCallback((msg: string) => {
+   120→    setDiagErrors((prev) => [msg.slice(0, 200), ...prev].slice(0, 15));
+   121→  }, []);
+   122→
+   123→  /* ---- enumerate cameras ---- */
+   124→  const enumerateCameras = useCallback(async (): Promise<{ id: string; label: string }[]> => {
+   125→    try {
+   126→      const devices = await navigator.mediaDevices.enumerateDevices();
+   127→      const cams = devices
+   128→        .filter((d) => d.kind === 'videoinput')
+   129→        .map((d) => ({ id: d.deviceId, label: d.label || `Camera ${d.deviceId.slice(0, 8)}` }));
+   130→      setCameraList(cams);
+   131→      return cams;
+   132→    } catch (err: any) {
+   133→      addError('enumerateDevices failed: ' + (err.message || err));
+   134→      return [];
+   135→    }
+   136→  }, [addError]);
+   137→
+   138→  /* ---- stop camera stream ---- */
+   139→  const stopStream = useCallback(() => {
+   140→    // Stop ZXing scanning via reset (stops internal rAF loop)
+   141→    if (readerRef.current) {
+   142→      try { readerRef.current.reset(); } catch { /* ignore */ }
+   143→      readerRef.current = null;
+   144→    }
+   145→    // Stop media stream
+   146→    if (streamRef.current) {
+   147→      streamRef.current.getTracks().forEach((t) => t.stop());
+   148→      streamRef.current = null;
+   149→    }
+   150→    if (videoRef.current) {
+   151→      videoRef.current.srcObject = null;
+   152→    }
+   153→  }, []);
+   154→
+   155→  /* ---- handle successful barcode detection ---- */
+   156→  const handleDetection = useCallback((result: any) => {
+   157→    if (cooldownRef.current || !mountedRef.current) return;
+   158→
+   159→    cooldownRef.current = true;
+   160→    setTimeout(() => { cooldownRef.current = false; }, COOLDOWN_MS);
+   161→
+   162→    const format = String(result?.getBarcodeFormat?.() || 'Unknown');
+   163→    const text = result?.getText?.() || String(result);
+   164→
+   165→    playBeep();
+   166→    vibrate();
+   167→
+   168→    setDetectedBarcode(text);
+   169→    setDetectedFormat(format);
+   170→    setScannerState('detected');
+   171→    setScanCount((c) => c + 1);
+   172→
+   173→    onBarcodeDetectedRef.current(text);
+   174→
+   175→    setTimeout(() => {
+   176→      if (mountedRef.current) setScannerState('scanning');
+   177→    }, 1500);
+   178→  }, []);
+   179→
+   180→  /* ---- start scanner with direct getUserMedia ---- */
+   181→  const startScanner = useCallback(
+   182→    async (cameraId?: string) => {
+   183→      if (!mountedRef.current) return;
+   184→
+   185→      // Stop any existing stream first
+   186→      stopStream();
+   187→
+   188→      setScannerState('starting');
+   189→      setErrorMsg('');
+   190→
+   191→      try {
+   192→        // Step 1: Import ZXing dynamically (client-only)
+   193→        const { BrowserMultiFormatReader } = await import('@zxing/library');
+   194→        const reader = new BrowserMultiFormatReader();
+   195→        readerRef.current = reader;
+   196→
+   197→        addError('ZXing library loaded');
+   198→
+   199→        // Step 2: Enumerate cameras first (may have empty labels before permission)
+   200→        const cams = await enumerateCameras();
+   201→        addError(`Found ${cams.length} video device(s)`);
+   202→
+   203→        // Step 3: Determine which camera to use
+   204→        let targetDeviceId = cameraId || '';
+   205→        if (!targetDeviceId && cams.length > 0) {
+   206→          const rear = cams.find((c) => /back|rear|environment|camera 0/i.test(c.label));
+   207→          targetDeviceId = rear ? rear.id : cams[0].id;
+   208→        }
+   209→
+   210→        // Step 4: Request camera access via getUserMedia - THIS triggers the permission dialog
+   211→        addError('Requesting camera access...');
+   212→        const constraints: MediaStreamConstraints = {
+   213→          video: {
+   214→            width: { ideal: 1280 },
+   215→            height: { ideal: 720 },
+   216→            frameRate: { ideal: 15 },
+   217→            ...(targetDeviceId ? { deviceId: { exact: targetDeviceId } } : { facingMode: 'environment' }),
+   218→          },
+   219→          audio: false,
+   220→        };
+   221→
+   222→        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+   223→        streamRef.current = stream;
+   224→
+   225→        if (!mountedRef.current) {
+   226→          stream.getTracks().forEach((t) => t.stop());
+   227→          return;
+   228→        }
+   229→
+   230→        addError('Camera stream acquired: ' + stream.getVideoTracks().length + ' track(s)');
+   231→        setPermissionStatus('granted');
+   232→
+   233→        // Step 5: Attach stream to video element (don't play it ourselves
+   234→        // — the ZXing library handles play() via playVideoOnLoadAsync,
+   235→        // and calling play() before the library sets up its 'playing' listener
+   236→        // would cause the promise to hang forever)
+   237→        const video = videoRef.current;
+   238→        if (!video) {
+   239→          throw new Error('Video element not found in DOM');
+   240→        }
+   241→        video.srcObject = stream;
+   242→
+   243→        addError('Stream attached, starting scanner...');
+   244→
+   245→        // Step 6: Re-enumerate to get labels now that we have permission
+   246→        const updatedCams = await enumerateCameras();
+   247→        const activeTrack = stream.getVideoTracks()[0];
+   248→        const activeDeviceId = activeTrack?.getSettings()?.deviceId;
+   249→        setSelectedCameraId(activeDeviceId || targetDeviceId);
+   250→
+   251→        // Step 7: Start continuous scanning via ZXing
+   252→        addError('Starting ZXing continuous scan...');
+   253→        await reader.decodeFromVideoElementContinuously(video, (result: any, error: any) => {
+   254→          // error is NotFoundException when no barcode found in frame (normal)
+   255→          // result is a Result object when a barcode IS found
+   256→          if (error) return;
+   257→          if (result) handleDetection(result);
+   258→        });
+   259→        setScannerState('scanning');
+   260→        addError('Scanner active - waiting for barcode');
+   261→
+   262→      } catch (err: any) {
+   263→        if (!mountedRef.current) return;
+   264→        const msg = err?.message || String(err);
+   265→        addError('Start failed: ' + msg);
+   266→
+   267→        if (/permission|denied|NotAllowedError/i.test(msg)) {
+   268→          setErrorMsg('Camera permission was denied. Please allow camera access in your browser settings and try again.');
+   269→          setPermissionStatus('denied');
+   270→        } else if (/not.*found|NotFoundError/i.test(msg)) {
+   271→          setErrorMsg('No camera was found on this device. Please enter the barcode manually.');
+   272→        } else if (/secure context|https/i.test(msg)) {
+   273→          setErrorMsg('Camera access requires HTTPS. Your app must be served over a secure connection.');
+   274→        } else if (/Requested device not found/i.test(msg)) {
+   275→          setErrorMsg('Could not access the selected camera. Try switching cameras or enter the barcode manually.');
+   276→        } else {
+   277→          setErrorMsg('Could not start the scanner: ' + msg + '. Enter the barcode manually below.');
+   278→        }
+   279→        setScannerState('error');
+   280→        setManualMode(true);
+   281→      }
+   282→    },
+   283→    [stopStream, enumerateCameras, addError, handleDetection]
+   284→  );
+   285→
+   286→  /* ---- switch camera ---- */
+   287→  const switchCamera = useCallback(async () => {
+   288→    const cams = cameraList.length > 0 ? cameraList : await enumerateCameras();
+   289→    if (cams.length < 2) {
+   290→      toast.error('Only one camera available.');
+   291→      return;
+   292→    }
+   293→    const currentIdx = cams.findIndex((c) => c.id === selectedCameraId);
+   294→    const nextIdx = (currentIdx + 1) % cams.length;
+   295→    startScanner(cams[nextIdx].id);
+   296→  }, [cameraList, selectedCameraId, enumerateCameras, startScanner]);
+   297→
+   298→  /* ---- toggle torch/flashlight ---- */
+   299→  const toggleTorch = useCallback(async () => {
+   300→    try {
+   301→      const track = streamRef.current?.getVideoTracks()[0];
+   302→      if (!track) {
+   303→        toast.error('No active camera track.');
+   304→        return;
+   305→      }
+   306→      const caps = track.getCapabilities?.();
+   307→      if (!caps?.torch) {
+   308→        toast.error('Flashlight is not supported on this device/camera.');
+   309→        return;
+   310→      }
+   311→      const newState = !torchOn;
+   312→      await track.applyConstraints({ advanced: [{ torch: newState }] as any });
+   313→      setTorchOn(newState);
+   314→    } catch (err: any) {
+   315→      addError('Torch error: ' + (err.message || err));
+   316→      toast.error('Could not toggle flashlight.');
+   317→    }
+   318→  }, [torchOn, addError]);
+   319→
+   320→  /* ---- manual barcode submit ---- */
+   321→  const handleManualSubmit = (e: React.FormEvent) => {
+   322→    e.preventDefault();
+   323→    const bc = manualBarcode.trim();
+   324→    if (!bc) return;
+   325→    setManualSubmitting(true);
+   326→    playBeep();
+   327→    vibrate();
+   328→    onBarcodeDetectedRef.current(bc);
+   329→    setDetectedBarcode(bc);
+   330→    setDetectedFormat('manual');
+   331→    setTimeout(() => {
+   332→      if (mountedRef.current) setManualSubmitting(false);
+   333→    }, 800);
+   334→  };
+   335→
+   336→  /* ---- mount / unmount ---- */
+   337→  useEffect(() => {
+   338→    mountedRef.current = true;
+   339→    // Small delay to ensure DOM is painted before requesting camera
+   340→    const timer = setTimeout(() => {
+   341→      if (mountedRef.current && !manualMode) {
+   342→        startScanner();
+   343→      }
+   344→    }, 100);
+   345→
+   346→    return () => {
+   347→      mountedRef.current = false;
+   348→      cooldownRef.current = false;
+   349→      clearTimeout(timer);
+   350→      stopStream();
+   351→    };
+   352→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   353→  }, []);
+   354→
+   355→  /* ---- restart when exiting manual mode ---- */
+   356→  useEffect(() => {
+   357→    if (!manualMode && scannerState === 'error') {
+   358→      setErrorMsg('');
+   359→      startScanner();
+   360→    }
+   361→  }, [manualMode, scannerState, startScanner]);
+   362→
+   363→  /* ---- check permission status on mount ---- */
+   364→  useEffect(() => {
+   365→    const check = async () => {
+   366→      try {
+   367→        if (navigator.permissions && navigator.permissions.query) {
+   368→          const result = await navigator.permissions.query({ name: 'camera' as any });
+   369→          setPermissionStatus(result.state);
+   370→          result.onchange = () => {
+   371→            if (mountedRef.current) setPermissionStatus(result.state);
+   372→          };
+   373→        } else {
+   374→          setPermissionStatus('unknown (API unavailable)');
+   375→        }
+   376→      } catch {
+   377→        setPermissionStatus('unknown');
+   378→      }
+   379→    };
+   380→    check();
+   381→  }, []);
+   382→
+   383→  /* ---- diagnostics object ---- */
+   384→  const diagnostics: Diagnostics = {
+   385→    permissionStatus,
+   386→    selectedCamera: selectedCameraId
+   387→      ? cameraList.find((c) => c.id === selectedCameraId)?.label || selectedCameraId.slice(0, 12)
+   388→      : 'none',
+   389→    scannerState,
+   390→    lastBarcode: detectedBarcode || 'none',
+   391→    lastFormat: detectedFormat || 'none',
+   392→    errors: diagErrors,
+   393→    scanCount,
+   394→  };
+   395→
+   396→  /* ================================================================== */
+   397→  /*  RENDER                                                             */
+   398→  /* ================================================================== */
+   399→
+   400→  return (
+   401→    <Dialog open onOpenChange={(open) => { if (!open) onCloseRef.current(); }}>
+   402→      <DialogContent className="max-w-md">
+   403→        <DialogHeader>
+   404→          <DialogTitle className="text-base flex items-center gap-2">
+   405→            <Camera className="h-4 w-4" />
+   406→            Scan Barcode
+   407→          </DialogTitle>
+   408→          <DialogDescription className="text-xs">
+   409→            Point the camera at a barcode. Supports EAN-13, EAN-8, UPC-A, Code 128, QR Code and more.
+   410→          </DialogDescription>
+   411→        </DialogHeader>
+   412→
+   413→        <div className="space-y-3">
+   414→          {/* ---------- Camera view ---------- */}
+   415→          {!manualMode && (
+   416→            <>
+   417→              {/* Success flash overlay */}
+   418→              {scannerState === 'detected' && (
+   419→                <div className="rounded-md bg-emerald-500/15 border border-emerald-500/40 p-3 text-center animate-in fade-in duration-200">
+   420→                  <p className="text-sm text-emerald-700 dark:text-emerald-400 font-medium">
+   421→                    ✓ {detectedBarcode}
+   422→                  </p>
+   423→                  <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70 mt-0.5">
+   424→                    {detectedFormat} • Looking up product…
+   425→                  </p>
+   426→                </div>
+   427→              )}
+   428→
+   429→              {/* Error banner */}
+   430→              {errorMsg && (
+   431→                <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3 flex gap-2">
+   432→                  <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+   433→                  <p className="text-sm text-destructive">{errorMsg}</p>
+   434→                </div>
+   435→              )}
+   436→
+   437→              {/* Video element - direct camera feed */}
+   438→              <div className="relative w-full rounded-md overflow-hidden bg-black" style={{ minHeight: 240 }}>
+   439→                <video
+   440→                  ref={videoRef}
+   441→                  muted
+   442→                  playsInline
+   443→                  className="w-full h-auto block"
+   444→                  style={{
+   445→                    minHeight: 240,
+   446→                    objectFit: 'cover',
+   447→                  }}
+   448→                />
+   449→                {/* Scanning overlay */}
+   450→                {scannerState === 'scanning' && (
+   451→                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+   452→                    <div className="w-3/4 h-2/5 border-2 border-white/70 rounded-lg relative">
+   453→                      {/* Scanning line animation */}
+   454→                      <div className="absolute left-0 right-0 h-0.5 bg-red-500/80 animate-bounce" style={{ top: '50%' }} />
+   455→                    </div>
+   456→                  </div>
+   457→                )}
+   458→                {/* Starting overlay */}
+   459→                {scannerState === 'starting' && (
+   460→                  <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+   461→                    <div className="text-white text-sm flex items-center gap-2">
+   462→                      <div className="h-4 w-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+   463→                      Starting camera…
+   464→                    </div>
+   465→                  </div>
+   466→                )}
+   467→              </div>
+   468→
+   469→              {/* Status indicator */}
+   470→              <div className="flex items-center justify-between text-xs text-muted-foreground">
+   471→                <div className="flex items-center gap-1.5">
+   472→                  <span
+   473→                    className={`h-2 w-2 rounded-full ${
+   474→                      scannerState === 'scanning'
+   475→                        ? 'bg-emerald-500 animate-pulse'
+   476→                        : scannerState === 'detected'
+   477→                        ? 'bg-emerald-500'
+   478→                        : scannerState === 'starting'
+   479→                        ? 'bg-amber-500 animate-pulse'
+   480→                        : 'bg-red-500'
+   481→                    }`}
+   482→                  />
+   483→                  {scannerState === 'scanning' && 'Scanning…'}
+   484→                  {scannerState === 'starting' && 'Starting camera…'}
+   485→                  {scannerState === 'detected' && 'Barcode detected!'}
+   486→                  {scannerState === 'error' && 'Scanner error'}
+   487→                  {scannerState === 'idle' && 'Idle'}
+   488→                </div>
+   489→                {scanCount > 0 && <span>{scanCount} scan{scanCount !== 1 ? 's' : ''}</span>}
+   490→              </div>
+   491→
+   492→              {/* Camera controls */}
+   493→              <div className="flex gap-2">
+   494→                {cameraList.length > 1 && (
+   495→                  <Button
+   496→                    variant="outline"
+   497→                    size="sm"
+   498→                    className="flex-1 h-9 text-xs"
+   499→                    onClick={switchCamera}
+   500→                  >
+   501→                    <SwitchCamera className="h-3.5 w-3.5 mr-1.5" />
+   502→                    Switch
+   503→                  </Button>
+   504→                )}
+   505→                <Button
+   506→                  variant="outline"
+   507→                  size="sm"
+   508→                  className="flex-1 h-9 text-xs"
+   509→                  onClick={toggleTorch}
+   510→                >
+   511→                  <Flashlight className={`h-3.5 w-3.5 mr-1.5 ${torchOn ? 'text-amber-500' : ''}`} />
+   512→                  {torchOn ? 'Torch ON' : 'Torch'}
+   513→                </Button>
+   514→                <Button
+   515→                  variant="outline"
+   516→                  size="sm"
+   517→                  className="flex-1 h-9 text-xs"
+   518→                  onClick={() => {
+   519→                    stopStream();
+   520→                    setManualMode(true);
+   521→                    setScannerState('idle');
+   522→                  }}
+   523→                >
+   524→                  <Keyboard className="h-3.5 w-3.5 mr-1.5" />
+   525→                  Manual
+   526→                </Button>
+   527→              </div>
+   528→            </>
+   529→          )}
+   530→
+   531→          {/* ---------- Manual mode ---------- */}
+   532→          {manualMode && (
+   533→            <div className="space-y-3">
+   534→              {errorMsg && (
+   535→                <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3 flex gap-2">
+   536→                  <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+   537→                  <p className="text-sm text-destructive">{errorMsg}</p>
+   538→                </div>
+   539→              )}
+   540→              <form onSubmit={handleManualSubmit} className="space-y-3">
+   541→                <div className="space-y-1.5">
+   542→                  <Label htmlFor="manual-barcode">Barcode Number</Label>
+   543→                  <Input
+   544→                    id="manual-barcode"
+   545→                    placeholder="Enter or paste barcode number"
+   546→                    value={manualBarcode}
+   547→                    onChange={(e) => setManualBarcode(e.target.value)}
+   548→                    autoFocus
+   549→                    autoComplete="off"
+   550→                    className="h-11"
+   551→                  />
+   552→                  <p className="text-xs text-muted-foreground">
+   553→                    Type the barcode number manually. A physical USB/Bluetooth barcode scanner will also work here.
+   554→                  </p>
+   555→                </div>
+   556→                <div className="flex gap-2">
+   557→                  <Button
+   558→                    type="submit"
+   559→                    className="flex-1 h-10"
+   560→                    disabled={manualSubmitting || !manualBarcode.trim()}
+   561→                  >
+   562→                    {manualSubmitting ? 'Looking up…' : 'Look Up Barcode'}
+   563→                  </Button>
+   564→                  <Button
+   565→                    type="button"
+   566→                    variant="outline"
+   567→                    className="h-10"
+   568→                    onClick={() => {
+   569→                      setManualMode(false);
+   570→                      setErrorMsg('');
+   571→                    }}
+   572→                  >
+   573→                    <Camera className="h-3.5 w-3.5 mr-1.5" />
+   574→                    Camera
+   575→                  </Button>
+   576→                  <Button
+   577→                    type="button"
+   578→                    variant="outline"
+   579→                    className="h-10"
+   580→                    onClick={() => onCloseRef.current()}
+   581→                  >
+   582→                    Cancel
+   583→                  </Button>
+   584→                </div>
+   585→              </form>
+   586→            </div>
+   587→          )}
+   588→
+   589→          <Separator />
+   590→
+   591→          {/* ---------- Debug / Diagnostics toggle ---------- */}
+   592→          <div>
+   593→            <button
+   594→              type="button"
+   595→              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+   596→              onClick={() => setShowDebug((v) => !v)}
+   597→            >
+   598→              <Bug className="h-3 w-3" />
+   599→              {showDebug ? 'Hide' : 'Show'} Diagnostics
+   600→            </button>
+   601→
+   602→            {showDebug && (
+   603→              <div className="mt-2 rounded-md bg-muted/60 border p-3 space-y-1.5 text-xs font-mono">
+   604→                <div className="flex justify-between">
+   605→                  <span className="text-muted-foreground">Permission:</span>
+   606→                  <Badge
+   607→                    variant={
+   608→                      permissionStatus === 'granted'
+   609→                        ? 'secondary'
+   610→                        : permissionStatus === 'denied'
+   611→                        ? 'destructive'
+   612→                        : 'outline'
+   613→                    }
+   614→                    className="text-[10px] px-1.5"
+   615→                  >
+   616→                    {diagnostics.permissionStatus}
+   617→                  </Badge>
+   618→                </div>
+   619→                <div className="flex justify-between">
+   620→                  <span className="text-muted-foreground">Scanner:</span>
+   621→                  <span>{diagnostics.scannerState}</span>
+   622→                </div>
+   623→                <div className="flex justify-between">
+   624→                  <span className="text-muted-foreground">Camera:</span>
+   625→                  <span className="truncate max-w-[180px]" title={diagnostics.selectedCamera}>
+   626→                    {diagnostics.selectedCamera}
+   627→                  </span>
+   628→                </div>
+   629→                <div className="flex justify-between">
+   630→                  <span className="text-muted-foreground">Last Barcode:</span>
+   631→                  <span className="font-semibold">{diagnostics.lastBarcode}</span>
+   632→                </div>
+   633→                <div className="flex justify-between">
+   634→                  <span className="text-muted-foreground">Format:</span>
+   635→                  <span>{diagnostics.lastFormat}</span>
+   636→                </div>
+   637→                <div className="flex justify-between">
+   638→                  <span className="text-muted-foreground">Total Scans:</span>
+   639→                  <span>{diagnostics.scanCount}</span>
+   640→                </div>
+   641→                {diagnostics.errors.length > 0 && (
+   642→                  <div className="mt-1.5 pt-1.5 border-t">
+   643→                    <p className="text-muted-foreground mb-1">Log:</p>
+   644→                    {diagnostics.errors.map((e, i) => (
+   645→                      <p key={i} className="text-foreground/80 break-all">• {e}</p>
+   646→                    ))}
+   647→                  </div>
+   648→                )}
+   649→                {cameraList.length > 0 && (
+   650→                  <div className="mt-1.5 pt-1.5 border-t">
+   651→                    <p className="text-muted-foreground mb-1">Available Cameras ({cameraList.length}):</p>
+   652→                    {cameraList.map((c) => (
+   653→                      <p key={c.id} className={c.id === selectedCameraId ? 'text-emerald-600' : ''}>
+   654→                        {c.id === selectedCameraId ? '► ' : '  '}{c.label}
+   655→                      </p>
+   656→                    ))}
+   657→                  </div>
+   658→                )}
+   659→              </div>
+   660→            )}
+   661→          </div>
+   662→        </div>
+   663→      </DialogContent>
+   664→    </Dialog>
+   665→  );
+   666→}
+   667→
