@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { getSessionFromRequest, apiError, apiSuccess, generateTransactionNumber, createAuditLog } from '@/lib/auth';
+import { syncSaleToGoogleSheet, buildSaleRow } from '@/lib/google-sheets';
 import { NextRequest } from 'next/server';
 
 export async function POST(req: NextRequest) {
@@ -93,6 +94,11 @@ export async function POST(req: NextRequest) {
       where: { id: result.id },
       include: { items: true, cashier: { select: { displayName: true } } },
     });
+
+    // Sync to Google Sheets in the background (never blocks the response)
+    if (completeSale) {
+      syncSaleToGoogleSheet(buildSaleRow(completeSale, completeSale.items, completeSale.cashier.displayName));
+    }
 
     return apiSuccess(completeSale);
   } catch (err: any) {

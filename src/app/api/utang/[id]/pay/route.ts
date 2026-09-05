@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { getSessionFromRequest, apiError, apiSuccess, isAdminOrOwner, createAuditLog } from '@/lib/auth';
+import { syncSaleToGoogleSheet, buildUtangPaidRow } from '@/lib/google-sheets';
 import { NextRequest } from 'next/server';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -34,6 +35,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     newValue: JSON.stringify({ status: 'COMPLETED', customerName: sale.customerName, amount: sale.total }),
     ipAddress: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
   });
+
+  // Sync utang payment to Google Sheets in the background
+  syncSaleToGoogleSheet(buildUtangPaidRow(sale, auth.user.displayName || auth.user.username));
 
   return apiSuccess({ paid: true });
 }
