@@ -90,6 +90,7 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
   const readerRef = useRef<any>(null);
   const cooldownRef = useRef(false);
   const mountedRef = useRef(true);
+  const scanRafRef = useRef<number>(0); // requestAnimationFrame id for our decode loop
 
   // UI state
   const [scannerState, setScannerState] = useState<
@@ -137,12 +138,17 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
 
   /* ---- stop camera stream ---- */
   const stopStream = useCallback(() => {
-    // Stop ZXing scanning via reset (stops internal rAF loop)
+    // Cancel our decode animation frame loop
+    if (scanRafRef.current) {
+      cancelAnimationFrame(scanRafRef.current);
+      scanRafRef.current = 0;
+    }
+    // Tear down ZXing reader internals (canvas refs etc.)
     if (readerRef.current) {
       try { readerRef.current.reset(); } catch { /* ignore */ }
       readerRef.current = null;
     }
-    // Stop media stream
+    // Stop media stream tracks
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -230,18 +236,42 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         addError('Camera stream acquired: ' + stream.getVideoTracks().length + ' track(s)');
         setPermissionStatus('granted');
 
-        // Step 5: Get video element (don't set srcObject ourselves —
-        // decodeFromStream handles attaching the stream to the video and
-        // calling play() internally. Setting srcObject before calling
-        // decodeFromVideoElementContinuously was a bug: that method calls
-        // reset() → cleanVideoSource() → video.srcObject = null, which
-        // destroyed the camera stream before scanning could start.)
+        // Step 5: Attach stream to video and play it ourselves.
+        // We deliberately avoid ZXing's decodeFromStream / decodeFromVideoElementContinuously
+        // because those methods call reset() internally which clears srcObject,
+        // and their decodeContinuously loop can silently die when instanceof
+        // checks fail across webpack ESM chunk boundaries. Instead we run our
+        // own requestAnimationFrame loop and call reader.decode() directly.
         const video = videoRef.current;
         if (!video) {
           throw new Error('Video element not found in DOM');
         }
 
-        addError('Starting scanner with stream...');
+        video.srcObject = stream;
+        addError('Stream attached to video element');
+
+        // Wait for video metadata + first frame so videoWidth/videoHeight > 0
+        await new Promise<void>((resolve, reject) => {
+          const onLoaded = () => {
+            video.removeEventListener('loadeddata', onLoaded);
+            video.removeEventListener('error', onError);
+            resolve();
+          };
+          const onError = () => {
+            video.removeEventListener('loadeddata', onLoaded);
+            video.removeEventListener('error', onError);
+            reject(new Error('Video element failed to load camera stream'));
+          };
+          if (video.readyState >= 2) { // HAVE_CURRENT_DATA or better
+            resolve();
+          } else {
+            video.addEventListener('loadeddata', onLoaded);
+            video.addEventListener('error', onError);
+          }
+        });
+
+        await video.play();
+        addError('Video playing (' + video.videoWidth + 'x' + video.videoHeight + ')');
 
         // Step 6: Re-enumerate to get labels now that we have permission
         const updatedCams = await enumerateCameras();
@@ -249,18 +279,38 @@ export function BarcodeScanner({ mode, onBarcodeDetected, onClose }: BarcodeScan
         const activeDeviceId = activeTrack?.getSettings()?.deviceId;
         setSelectedCameraId(activeDeviceId || targetDeviceId);
 
-        // Step 7: Start continuous scanning via ZXing
-        // Use decodeFromStream which properly attaches the stream to the
-        // video element after its internal reset, then plays and scans.
-        addError('Starting ZXing continuous scan...');
-        await reader.decodeFromStream(stream, video, (result: any, error: any) => {
-          // error is NotFoundException when no barcode found in frame (normal)
-          // result is a Result object when a barcode IS found
-          if (error) return;
-          if (result) handleDetection(result);
-        });
+        // Step 7: Start OUR requestAnimationFrame decode loop.
+        // We call reader.decode(video) on every frame ourselves, which only
+        // does the core barcode decode (draw frame → binarize → decode bitmap)
+        // without touching video management or internal event listeners.
         setScannerState('scanning');
-        addError('Scanner active - waiting for barcode');
+        addError('Decode loop started - waiting for barcode');
+
+        const scanLoop = () => {
+          if (!mountedRef.current) return;
+          try {
+            const result = reader.decode(video);
+            // Successful decode — result is a ZXing Result object
+            handleDetection(result);
+          } catch (e: any) {
+            // NotFoundException is expected on every frame without a barcode.
+            // Check by name/class instead of instanceof to avoid issues with
+            // webpack ESM chunk splitting breaking class identity.
+            const name = e?.constructor?.name || '';
+            if (
+              name === 'NotFoundException' ||
+              name === 'ChecksumException' ||
+              name === 'FormatException'
+            ) {
+              // Normal — no barcode in this frame, keep scanning
+            } else {
+              // Unexpected decode error — log but don't stop the loop
+              addError('Decode err: ' + (e?.message || name).slice(0, 80));
+            }
+          }
+          scanRafRef.current = requestAnimationFrame(scanLoop);
+        };
+        scanRafRef.current = requestAnimationFrame(scanLoop);
 
       } catch (err: any) {
         if (!mountedRef.current) return;
